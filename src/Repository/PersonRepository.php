@@ -25,10 +25,43 @@ class PersonRepository extends ServiceEntityRepository
         parent::__construct($registry, Person::class);
     }
 
+    /**
+     * Loads the people behind a list of names in one statement.
+     *
+     * findOrCreate() answers from $pending whenever it can, so filling it first
+     * turns a lookup per cast member into a single query. A film credits about
+     * fifteen people; asking for them one at a time is fifteen round trips to
+     * the database, and during a long crawl that is what sets the pace — not
+     * the API, not the CPU.
+     *
+     * Safe to hold managed entities here because every clear() of the entity
+     * manager calls resetPending(), so nothing detached is ever handed back.
+     *
+     * @param list<string> $names
+     */
+    public function warm(array $names): void
+    {
+        $slugs = [];
+        foreach ($names as $name) {
+            $slug = $this->slugFor($name);
+            if ('' !== $slug && !isset($this->pending[$slug])) {
+                // Keyed, so a name credited twice is asked for once.
+                $slugs[$slug] = true;
+            }
+        }
+
+        if ([] === $slugs) {
+            return;
+        }
+
+        foreach ($this->findBy(['slug' => array_keys($slugs)]) as $person) {
+            $this->pending[(string) $person->getSlug()] = $person;
+        }
+    }
+
     public function findOrCreate(string $name, ?string $photo = null, ?string $externalId = null): Person
     {
-        // people.slug is varchar(200), people.name varchar(180).
-        $slug = mb_substr(self::slugify($name), 0, 200);
+        $slug = $this->slugFor($name);
         $person = $this->pending[$slug] ?? $this->findOneBy(['slug' => $slug]);
 
         if (null === $person) {
@@ -63,6 +96,18 @@ class PersonRepository extends ServiceEntityRepository
             ->setMaxResults($limit)
             ->getQuery()
             ->getResult();
+    }
+
+    /**
+     * The key a person is stored under. Shared by warm() and findOrCreate() so
+     * the two cannot drift — a mismatch would silently reintroduce the query
+     * per person that warming exists to remove.
+     *
+     * people.slug is varchar(200), people.name varchar(180).
+     */
+    private function slugFor(string $name): string
+    {
+        return mb_substr(self::slugify($name), 0, 200);
     }
 
     /** Called when the entity manager is cleared: the pending objects are gone. */

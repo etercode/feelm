@@ -227,6 +227,49 @@ final class CatalogWorkPersister
      * @param array<string, mixed> $row
      * @param array<string, mixed> $details
      */
+
+    /**
+     * Every person named by a title's credits, cast and crew together.
+     *
+     * Collected before anything is looked up so the whole set can be fetched at
+     * once. Names are returned as given; the repository owns how they turn into
+     * keys.
+     *
+     * @param mixed                       $cast
+     * @param array<string, mixed>        $crew
+     *
+     * @return list<string>
+     */
+    private function creditNames(mixed $cast, array $crew): array
+    {
+        $names = [];
+
+        if (\is_array($cast)) {
+            foreach ($cast as $member) {
+                if (\is_array($member)) {
+                    $name = trim((string) ($member['name'] ?? ''));
+                    if ('' !== $name) {
+                        $names[] = $name;
+                    }
+                }
+            }
+        }
+
+        foreach ($crew as $list) {
+            if (!\is_array($list)) {
+                continue;
+            }
+            foreach ($list as $name) {
+                $name = trim((string) $name);
+                if ('' !== $name) {
+                    $names[] = $name;
+                }
+            }
+        }
+
+        return $names;
+    }
+
     private function syncCredits(Work $work, array $row, array $details): void
     {
         $cast = $row['cast'] ?? $details['cast'] ?? null;
@@ -248,6 +291,9 @@ final class CatalogWorkPersister
             $work->getCredits()->removeElement($credit);
             $this->entityManager->remove($credit);
         }
+
+        // One query for everyone this title credits, instead of one per name.
+        $this->people->warm($this->creditNames($cast, $crew));
 
         /*
          * TMDB happily lists the same actor twice — two roles in one film, or a

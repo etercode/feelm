@@ -1,7 +1,7 @@
-# You Know Me — API
+# Feelm — API
 
-Symfony 8.1 (PHP 8.5) JSON API for **You Know Me**. Pairs with the SvelteKit
-frontend in `../youknowme-front`.
+Symfony 8.1 (PHP 8.5) JSON API for **Feelm**. Pairs with the SvelteKit
+frontend in `../feelm-front`.
 
 Auth matches the runbook pattern: opaque Bearer access tokens + refresh tokens
 stored in Postgres (no JWT). Login is **username** + password.
@@ -17,7 +17,7 @@ docker compose exec php bin/console app:catalog:seed
 | service  | where                                             |
 | -------- | ------------------------------------------------- |
 | API      | http://localhost:8092                             |
-| Postgres | `localhost:5435` — db `youknowme`, user/pass `app` |
+| Postgres | `localhost:5435` — db `feelm`, user/pass `app` |
 
 ```bash
 docker compose exec php bin/console about
@@ -207,7 +207,7 @@ scripts/backup.sh                    # verified pg_dump -Fc into var/backups
 KEEP=20 scripts/backup.sh            # keep more snapshots
 
 # every six hours while a crawl is running
-0 */6 * * * cd /path/to/youknowme && scripts/backup.sh >> var/log/backup.log 2>&1
+0 */6 * * * cd /path/to/feelm && scripts/backup.sh >> var/log/backup.log 2>&1
 ```
 
 Each snapshot is checked with `pg_restore --list` before it is kept, and the
@@ -215,11 +215,11 @@ restore path is exercised, not assumed:
 
 ```bash
 docker compose cp var/backups/<file> database:/tmp/restore.dump
-docker compose exec database pg_restore -U app -d youknowme --clean --if-exists /tmp/restore.dump
+docker compose exec database pg_restore -U app -d feelm --clean --if-exists /tmp/restore.dump
 ```
 
 **`docker compose down` is safe — `docker compose down -v` is not.** The data
-lives in the `youknowme_database_data` volume; `-v` deletes it, and with it the
+lives in the `feelm_database_data` volume; `-v` deletes it, and with it the
 days of crawling.
 
 ### Crawling every movie
@@ -301,7 +301,7 @@ so a loop or a timer is all it needs:
 while docker compose exec -T php bin/console app:catalog:crawl-all --limit=500 --no-media; do sleep 5; done
 
 # or a cron entry, which self-limits and survives reboots
-*/15 * * * * cd /path/to/youknowme && docker compose exec -T php bin/console app:catalog:crawl-all --limit=3000 --no-media >> var/log/crawl.log 2>&1
+*/15 * * * * cd /path/to/feelm && docker compose exec -T php bin/console app:catalog:crawl-all --limit=3000 --no-media >> var/log/crawl.log 2>&1
 ```
 
 Both are resumable: whatever was stored stays stored, and the next run picks up

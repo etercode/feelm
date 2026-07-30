@@ -1,10 +1,15 @@
+# Fixes the Compose project name. Without it the name comes from the
+# directory, so renaming the checkout would silently orphan the database
+# volume and start again on an empty one.
+name: feelm
+
 services:
   php:
     build:
       context: .
       dockerfile: docker/php/Dockerfile
       target: dev
-    container_name: youknowme_php
+    container_name: feelm_php
     depends_on:
       database:
         condition: service_healthy
@@ -14,16 +19,16 @@ services:
     build:
       context: .
       dockerfile: docker/nginx/Dockerfile
-    container_name: youknowme_nginx
+    container_name: feelm_nginx
     depends_on:
       - php
     restart: unless-stopped
 
   database:
     image: postgres:${POSTGRES_VERSION:-18}-alpine
-    container_name: youknowme_db
+    container_name: feelm_db
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-youknowme}
+      POSTGRES_DB: ${POSTGRES_DB:-feelm}
       POSTGRES_USER: ${POSTGRES_USER:-app}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
       # A stable data path inside the volume, across image versions.
@@ -31,7 +36,7 @@ services:
     volumes:
       - database_data:/var/lib/postgresql/data:rw
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-youknowme}']
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-feelm}']
       interval: 5s
       timeout: 5s
       retries: 10

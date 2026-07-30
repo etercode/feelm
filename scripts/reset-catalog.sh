@@ -18,7 +18,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-DB="${POSTGRES_DB:-youknowme}"
+DB="${POSTGRES_DB:-feelm}"
 USER="${POSTGRES_USER:-app}"
 CONFIRMED=false
 DROP_MEDIA=false

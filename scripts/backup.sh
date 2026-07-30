@@ -11,13 +11,13 @@
 #
 # Restore with:
 #   docker compose cp var/backups/<file> database:/tmp/restore.dump
-#   docker compose exec database pg_restore -U app -d youknowme --clean --if-exists /tmp/restore.dump
+#   docker compose exec database pg_restore -U app -d feelm --clean --if-exists /tmp/restore.dump
 #
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-DB="${POSTGRES_DB:-youknowme}"
+DB="${POSTGRES_DB:-feelm}"
 USER="${POSTGRES_USER:-app}"
 KEEP="${KEEP:-8}"
 DIR="var/backups"

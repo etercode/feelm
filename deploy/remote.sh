@@ -33,8 +33,11 @@ for _ in $(seq 30); do
 done
 
 echo "==> Migrating"
+# As www-data, not root. A console command warms the cache as a side effect,
+# and anything root writes into var/cache the FPM workers cannot replace later
+# — the site then 500s on a permission error that looks nothing like its cause.
 # --allow-no-migration: a deploy that changes no schema is not a failure.
-$COMPOSE exec -T php bin/console doctrine:migrations:migrate \
+$COMPOSE exec -T --user www-data php bin/console doctrine:migrations:migrate \
     --no-interaction --allow-no-migration
 
 echo "==> Checking"

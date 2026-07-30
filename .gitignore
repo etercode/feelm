@@ -1,0 +1,26 @@
+
+###> symfony/framework-bundle ###
+/.env.local
+/.env.local.php
+/.env.*.local
+/config/secrets/prod/prod.decrypt.private.php
+/public/bundles/
+/var/
+/vendor/
+###< symfony/framework-bundle ###
+
+# Real secrets live here on a developer machine and on the server. Symfony
+# treats .env.<env> as committable defaults, which is exactly the trap: this
+# one holds a live TMDB token, so it stays out of the repository.
+/.env.dev
+/.env.prod
+
+# TMDB crawl cursor and queue state — per-machine, not source (keep .gitkeep)
+/data/crawl/state.json
+/data/crawl/*.json
+/data/crawl/*.jsonl
+/data/crawl/*.index.json
+!/data/crawl/.gitkeep
+
+# Downloaded TMDB artwork
+/public/media/

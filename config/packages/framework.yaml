@@ -1,0 +1,18 @@
+# see https://symfony.com/doc/current/reference/configuration/framework.html
+framework:
+    secret: '%env(APP_SECRET)%'
+
+    # Stateless API — do not start PHP sessions.
+    session: false
+
+    http_client:
+        # The crawler sends a window of requests at once. Six is the default and
+        # would quietly cap the window at six however wide it is asked to be.
+        max_host_connections: 25
+
+    #esi: true
+    #fragments: true
+
+when@test:
+    framework:
+        test: true

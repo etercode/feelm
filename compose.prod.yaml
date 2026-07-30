@@ -1,0 +1,45 @@
+# Production overlay. Used explicitly, never picked up by accident:
+#
+#   docker compose --env-file .env.prod -f compose.yaml -f compose.prod.yaml up -d --build
+#
+# Two things are going on with environment variables, and they are easy to
+# confuse:
+#
+#   --env-file  feeds Compose's own ${...} interpolation, which is what sets the
+#               Postgres password in compose.yaml. Without it Compose falls back
+#               to the defaults there and the database would run with the
+#               throwaway development password.
+#   env_file:   puts variables inside the php container, where Symfony reads
+#               them. Real environment variables win over any .env file baked
+#               into the image, so this is what supplies the production secrets.
+#
+# Compose auto-loads compose.override.yaml — the developer's file, with bind
+# mounts and host ports. The command above lists its files explicitly, so the
+# override is never loaded here.
+services:
+  php:
+    build:
+      # The application is baked into the image rather than mounted, so what
+      # runs is exactly what was built from the commit that triggered the deploy.
+      target: prod
+    env_file:
+      - .env.prod
+    volumes:
+      # Posters the crawler downloads. Shared with nginx, which serves them.
+      - media:/var/www/app/public/media
+
+  nginx:
+    ports:
+      # Localhost only. The host's nginx terminates TLS and proxies here, so
+      # this port is not reachable from outside the machine.
+      - '127.0.0.1:8093:80'
+    volumes:
+      - media:/var/www/app/public/media:ro
+
+  database:
+    # No host port. Nothing outside the Compose network needs to reach Postgres;
+    # `docker compose exec database psql` still works for maintenance.
+    shm_size: 256mb
+
+volumes:
+  media:

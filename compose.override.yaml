@@ -1,0 +1,21 @@
+services:
+  php:
+    # Run FPM as the host user so everything the container writes into the
+    # bind mount (var/cache, var/log, files made by bin/console) stays yours.
+    # Override with UID/GID in the environment if your user is not 1000.
+    user: '${UID:-1000}:${GID:-1000}'
+    volumes:
+      - ./:/var/www/app:cached
+
+  nginx:
+    ports:
+      # 8088 and 8090 already belong to the neighbouring projects.
+      - '8092:80'
+    volumes:
+      - ./:/var/www/app:ro,cached
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+
+  database:
+    ports:
+      # 5432–5434 are taken on this host; inside Docker the port stays 5432.
+      - '5435:5432'

@@ -1,6 +1,10 @@
-twig:
-    file_name_pattern: '*.twig'
+# Twig is only present in dev and test — it comes with the profiler. Guarded so
+# production, which installs no dev dependencies, has nothing to configure.
+when@dev:
+    twig:
+        file_name_pattern: '*.twig'
 
 when@test:
     twig:
+        file_name_pattern: '*.twig'
         strict_variables: true

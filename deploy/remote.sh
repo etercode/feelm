@@ -40,6 +40,12 @@ echo "==> Migrating"
 $COMPOSE exec -T --user www-data php bin/console doctrine:migrations:migrate \
     --no-interaction --allow-no-migration
 
+# A cache built by a previous image can outlive the container that made it, and
+# a bad one fails every request with an error that names nothing useful. Cheap
+# insurance, and it runs as www-data so the files stay writable by the workers.
+echo "==> Clearing the cache"
+$COMPOSE exec -T --user www-data php bin/console cache:clear --no-interaction
+
 echo "==> Checking"
 # The container is only healthy once nginx and FPM agree, so ask through nginx.
 for attempt in $(seq 15); do

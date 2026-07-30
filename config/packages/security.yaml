@@ -47,6 +47,8 @@ security:
         - { path: ^/api/search, methods: [GET], roles: PUBLIC_ACCESS }
         - { path: ^/api/upcoming, methods: [GET], roles: PUBLIC_ACCESS }
         - { path: ^/api/users, methods: [GET], roles: PUBLIC_ACCESS }
+        # Crawl progress: counts and titles already public through /api/items.
+        - { path: ^/api/crawl, methods: [GET], roles: PUBLIC_ACCESS }
         - { path: ^/api, roles: IS_AUTHENTICATED_FULLY }
 
 when@test:

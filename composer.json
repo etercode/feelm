@@ -75,6 +75,7 @@
         }
     },
     "require-dev": {
-        "symfony/maker-bundle": "*"
+        "symfony/maker-bundle": "*",
+        "symfony/web-profiler-bundle": "8.1.*"
     }
 }

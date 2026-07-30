@@ -1,0 +1,36 @@
+name: Deploy
+
+# Every push to main goes live. Also runnable by hand from the Actions tab,
+# which is the way to redeploy without an empty commit.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A second push while a deploy is running waits for it rather than racing it
+# onto the same server directory.
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # Only to get deploy/remote.sh; the server pulls its own code.
+      - uses: actions/checkout@v5
+
+      - name: Load the SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # Pinned host key: without it StrictHostKeyChecking would have to be
+          # turned off, which trades away the check that we are talking to the
+          # right server.
+          echo "${{ secrets.VPS_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+
+      - name: Deploy
+        run: |
+          ssh -i ~/.ssh/id_ed25519 "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            'bash -s' < deploy/remote.sh

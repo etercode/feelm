@@ -17,9 +17,23 @@ class AccessTokenRepository extends ServiceEntityRepository
         parent::__construct($registry, AccessToken::class);
     }
 
+    /**
+     * The bearer token, with its owner already loaded.
+     *
+     * The user is joined in rather than left to the proxy. Every authenticated
+     * request asks this question, and the very next thing the handler does is
+     * read the user to check whether the account is deleted — which would
+     * initialise the proxy and cost a second round trip, on every request.
+     */
     public function findOneByToken(string $token): ?AccessToken
     {
-        return $this->findOneBy(['token' => $token, 'deletedAt' => null]);
+        return $this->createQueryBuilder('t')
+            ->innerJoin('t.user', 'u')->addSelect('u')
+            ->andWhere('t.token = :token')
+            ->andWhere('t.deletedAt IS NULL')
+            ->setParameter('token', $token)
+            ->getQuery()
+            ->getOneOrNullResult();
     }
 
     public function findOneByRefreshToken(string $refreshToken): ?AccessToken

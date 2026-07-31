@@ -31,6 +31,16 @@ class AccessTokenHandler implements AccessTokenHandlerInterface
             throw new BadCredentialsException('Invalid or expired access token.');
         }
 
-        return new UserBadge($user->getUserIdentifier());
+        /*
+         * Handed back with the user, not just their name.
+         *
+         * A UserBadge carrying only an identifier makes Symfony ask the user
+         * provider for it, which loads the same row again by username — so
+         * every authenticated request read the users table twice, once by id
+         * to get here and once by name to answer that. The loader short-
+         * circuits it. UserChecker still runs either way, so a deleted account
+         * is still refused.
+         */
+        return new UserBadge($user->getUserIdentifier(), static fn () => $user);
     }
 }

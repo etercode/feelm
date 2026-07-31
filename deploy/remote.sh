@@ -26,9 +26,14 @@ $COMPOSE build
 echo "==> Starting"
 $COMPOSE up -d --remove-orphans
 
+# Every `docker compose exec` below redirects stdin from /dev/null. It reads
+# stdin even with -T, and this script used to be piped into `bash -s` — so the
+# first exec ate the rest of the script, and the migrations, the cache clear
+# and the health check silently never ran. The workflow writes the script to a
+# file now; these redirects mean it would not matter if that ever changed back.
 echo "==> Waiting for the database"
 for _ in $(seq 30); do
-    if $COMPOSE exec -T database pg_isready -q; then break; fi
+    if $COMPOSE exec -T database pg_isready -q </dev/null; then break; fi
     sleep 2
 done
 
@@ -38,13 +43,13 @@ echo "==> Migrating"
 # — the site then 500s on a permission error that looks nothing like its cause.
 # --allow-no-migration: a deploy that changes no schema is not a failure.
 $COMPOSE exec -T --user www-data php bin/console doctrine:migrations:migrate \
-    --no-interaction --allow-no-migration
+    --no-interaction --allow-no-migration </dev/null
 
 # A cache built by a previous image can outlive the container that made it, and
 # a bad one fails every request with an error that names nothing useful. Cheap
 # insurance, and it runs as www-data so the files stay writable by the workers.
 echo "==> Clearing the cache"
-$COMPOSE exec -T --user www-data php bin/console cache:clear --no-interaction
+$COMPOSE exec -T --user www-data php bin/console cache:clear --no-interaction </dev/null
 
 echo "==> Checking"
 # The container is only healthy once nginx and FPM agree, so ask through nginx.

@@ -30,7 +30,15 @@ jobs:
           # right server.
           echo "${{ secrets.VPS_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
 
+      # Written to a file first, then run — not piped into `bash -s`.
+      #
+      # Piped, the script arrives on stdin, and so does everything after the
+      # first command that reads stdin. `docker compose exec` does, even with
+      # -T: it swallowed the rest of the script from the database-wait loop
+      # onward, so the migrations, the cache clear and the health check never
+      # ran. Bash reached EOF and exited 0, and a deploy that left the site
+      # returning 500 on every request was reported as a success.
       - name: Deploy
         run: |
           ssh -i ~/.ssh/id_ed25519 "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
-            'bash -s' < deploy/remote.sh
+            'cat > /tmp/feelm-deploy.sh && bash /tmp/feelm-deploy.sh' < deploy/remote.sh

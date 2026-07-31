@@ -8,11 +8,13 @@ RUN apk add --no-cache \
 
 COPY --from=mlocati/php-extension-installer:latest /usr/bin/install-php-extensions /usr/local/bin/
 
-# intl is Symfony-recommended; pdo_pgsql for Postgres; the rest are standard.
+# intl is Symfony-recommended; pdo_pgsql for Postgres; gd redraws uploaded
+# avatars server-side; the rest are standard.
 RUN install-php-extensions \
         intl \
         opcache \
         zip \
+        gd \
         pdo_pgsql
 
 COPY --from=composer:latest /usr/bin/composer /usr/local/bin/composer

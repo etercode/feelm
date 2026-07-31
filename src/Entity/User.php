@@ -49,6 +49,14 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
     private ?string $location = null;
 
     /**
+     * Public path to the uploaded portrait, e.g. "/media/avatars/7-a1b2c3.jpg".
+     * Null means the front end draws initials instead, which most accounts
+     * never move on from.
+     */
+    #[ORM\Column(length: 255, nullable: true)]
+    private ?string $avatar = null;
+
+    /**
      * When this account last caught up with the catalog. Anything the crawler
      * added after this — and that the person has not opened — reads as new.
      */
@@ -170,6 +178,18 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
     public function setLocation(?string $location): static
     {
         $this->location = $location;
+
+        return $this;
+    }
+
+    public function getAvatar(): ?string
+    {
+        return $this->avatar;
+    }
+
+    public function setAvatar(?string $avatar): static
+    {
+        $this->avatar = $avatar;
 
         return $this;
     }

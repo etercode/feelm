@@ -18,6 +18,7 @@ final class UserPresenter
             'tagline' => $user->getTagline(),
             'bio' => $user->getBio(),
             'location' => $user->getLocation(),
+            'avatar' => $user->getAvatar(),
             'joinedAt' => $user->getCreatedAt()?->format('Y-m-d'),
         ];
     }
@@ -33,6 +34,7 @@ final class UserPresenter
             'id' => $user->getId(),
             'username' => $user->getUsername(),
             'name' => $user->getName(),
+            'avatar' => $user->getAvatar(),
         ];
     }
 }

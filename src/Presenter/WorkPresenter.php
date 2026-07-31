@@ -29,6 +29,31 @@ final class WorkPresenter
      */
     public function one(Work $work): array
     {
+        return $this->build($work, withCredits: true);
+    }
+
+    /**
+     * One row of a listing — browse, search, a rail.
+     *
+     * Everything one() has except who worked on it. A list draws a poster, a
+     * title and a line of facts; the cast belongs to the page you open. Sending
+     * it anyway meant loading every credit and every person behind it for every
+     * result on every page, which was the single most expensive part of a
+     * browse: about six people per title, joined and serialised, to render
+     * nothing.
+     *
+     * @return array<string, mixed>
+     */
+    public function listItem(Work $work): array
+    {
+        return $this->build($work, withCredits: false);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function build(Work $work, bool $withCredits): array
+    {
         $payload = [
             'id' => $work->getId(),
             'type' => $work->getType(),
@@ -45,7 +70,7 @@ final class WorkPresenter
             'ratings' => $this->ratings($work),
             'externalIds' => $this->externalIds($work),
             'source' => $work->getSource(),
-            'details' => $this->details($work),
+            'details' => $this->details($work, $withCredits),
             'addedAt' => $work->getAddedAt()?->format(\DateTimeInterface::ATOM),
             'isUpcoming' => $work->isUpcoming(),
         ];
@@ -225,7 +250,7 @@ final class WorkPresenter
      *
      * @return array<string, mixed>
      */
-    private function details(Work $work): array
+    private function details(Work $work, bool $withCredits = true): array
     {
         // Display-only leftovers first, so a real column always wins.
         $details = $work->getExtra();
@@ -234,6 +259,17 @@ final class WorkPresenter
         $details['certification'] = $work->getCertification();
         $details['releaseDate'] = $work->getReleaseDate()?->format('Y-m-d');
         $details['originalLanguage'] = $work->getOriginalLanguage();
+
+        if (!$withCredits) {
+            if (null !== $work->getPageCount()) {
+                $details['pages'] = $work->getPageCount();
+            }
+            if (null !== $work->getPublisher()) {
+                $details['publisher'] = $work->getPublisher();
+            }
+
+            return $details;
+        }
 
         foreach ([
             'directors' => Credit::ROLE_DIRECTOR,

@@ -32,15 +32,17 @@ class SearchController extends AbstractController
     public function search(Request $request): JsonResponse
     {
         $criteria = SearchCriteria::fromRequest($request);
-        $result = $this->search->search($criteria);
+        $withTotal = $request->query->getBoolean('total', true);
+        $result = $this->search->search($criteria, withTotal: $withTotal);
 
         $payload = [
             'query' => $criteria->query,
             'criteria' => $criteria->toArray(),
-            'items' => array_map(fn ($work) => $this->presenter->one($work), $result['works']),
+            'items' => array_map(fn ($work) => $this->presenter->listItem($work), $result['works']),
             'total' => $result['total'],
             'page' => $result['page'],
             'pages' => $result['pages'],
+            'hasMore' => $result['hasMore'],
             'limit' => $result['limit'],
             'matched' => $result['matched'],
             'suggestion' => $result['suggestion'],
@@ -70,7 +72,7 @@ class SearchController extends AbstractController
 
         return $this->json([
             'query' => $criteria->query,
-            'items' => array_map(fn ($work) => $this->presenter->one($work), $result['works']),
+            'items' => array_map(fn ($work) => $this->presenter->listItem($work), $result['works']),
             'total' => $result['total'],
             'suggestion' => $result['suggestion'],
             'people' => array_map(static fn ($person) => [

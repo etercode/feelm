@@ -37,13 +37,18 @@ class WorkController extends AbstractController
     public function list(Request $request): JsonResponse
     {
         $criteria = SearchCriteria::fromRequest($request);
-        $result = $this->search->search($criteria, withSuggestion: false);
+
+        // `?total=0` from a caller that does not print the number: it halves
+        // the work, and the pager still learns whether a next page exists.
+        $withTotal = $request->query->getBoolean('total', true);
+        $result = $this->search->search($criteria, withSuggestion: false, withTotal: $withTotal);
 
         return $this->json([
-            'items' => array_map(fn (Work $work) => $this->presenter->one($work), $result['works']),
+            'items' => array_map(fn (Work $work) => $this->presenter->listItem($work), $result['works']),
             'total' => $result['total'],
             'page' => $result['page'],
             'pages' => $result['pages'],
+            'hasMore' => $result['hasMore'],
             'limit' => $result['limit'],
         ]);
     }

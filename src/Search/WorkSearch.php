@@ -42,30 +42,50 @@ final class WorkSearch
     /**
      * @return array{
      *     works: list<Work>,
-     *     total: int,
+     *     total: int|null,
      *     page: int,
      *     limit: int,
-     *     pages: int,
+     *     pages: int|null,
+     *     hasMore: bool,
      *     matched: bool,
      *     suggestion: array{term: string, total: int}|null,
      * }
      */
-    public function search(SearchCriteria $criteria, bool $withSuggestion = true): array
+    public function search(SearchCriteria $criteria, bool $withSuggestion = true, bool $withTotal = true): array
     {
         [$where, $params, $types] = $this->conditions($criteria);
 
-        $total = (int) $this->connection()->executeQuery(
-            'SELECT COUNT(*) FROM works w '.$this->joins($criteria).' WHERE '.$where,
-            $params,
-            $types,
-        )->fetchOne();
+        /*
+         * Counting is about half the work of a listing — 189ms against 225ms
+         * for the rows themselves, because there is no way to know how many of
+         * seven hundred thousand match without looking at all of them.
+         *
+         * A caller that does not print the number does not have to pay for it.
+         * It gets one row more than it asked for instead, which answers the
+         * only other question a pager has: is there a page after this one.
+         */
+        $total = null;
+        if ($withTotal) {
+            $total = (int) $this->connection()->executeQuery(
+                'SELECT COUNT(*) FROM works w '.$this->joins($criteria).' WHERE '.$where,
+                $params,
+                $types,
+            )->fetchOne();
+        }
 
-        $ids = $this->ids($criteria, $where, $params, $types);
+        $ids = $this->ids($criteria, $where, $params, $types, $withTotal ? 0 : 1);
+        $hasMore = $withTotal
+            ? $criteria->offset() + \count($ids) < $total
+            : \count($ids) > $criteria->limit;
+
+        if (!$withTotal) {
+            $ids = \array_slice($ids, 0, $criteria->limit);
+        }
 
         // Nothing matched? Offer the closest spelling we know, and say how many
         // rows it would return, so the UI can decide whether to lead with it.
         $suggestion = null;
-        if ($withSuggestion && $criteria->hasQuery() && $total < self::SUGGEST_BELOW) {
+        if ($withSuggestion && $criteria->hasQuery() && null !== $total && $total < self::SUGGEST_BELOW) {
             $suggestion = $this->suggestion($criteria, $total);
         }
 
@@ -74,8 +94,9 @@ final class WorkSearch
             'total' => $total,
             'page' => $criteria->page,
             'limit' => $criteria->limit,
-            'pages' => (int) ceil($total / $criteria->limit),
-            'matched' => $total > 0,
+            'pages' => null === $total ? null : (int) ceil($total / $criteria->limit),
+            'hasMore' => $hasMore,
+            'matched' => null === $total ? [] !== $ids : $total > 0,
             'suggestion' => $suggestion,
         ];
     }
@@ -208,7 +229,7 @@ final class WorkSearch
      *
      * @return list<int>
      */
-    private function ids(SearchCriteria $criteria, string $where, array $params, array $types): array
+    private function ids(SearchCriteria $criteria, string $where, array $params, array $types, int $extra = 0): array
     {
         $order = $this->orderExpressions($criteria);
 
@@ -225,7 +246,7 @@ final class WorkSearch
                 ORDER BY '.$order['order'].'
                 LIMIT :limit OFFSET :offset';
 
-        $params['limit'] = $criteria->limit;
+        $params['limit'] = $criteria->limit + $extra;
         $params['offset'] = $criteria->offset();
         $types['limit'] = ParameterType::INTEGER;
         $types['offset'] = ParameterType::INTEGER;
@@ -580,8 +601,16 @@ final class WorkSearch
             ->getQuery()
             ->getResult();
 
-        // Everything the presenter reads, loaded up front — see WorkHydrator.
-        $this->hydrator->preloadIds($ids);
+        /*
+         * Everything the list presenter reads — see WorkHydrator. Not credits:
+         * a listing does not name anybody, and loading them meant a join to
+         * people for roughly six of them per result, on every page.
+         */
+        $this->hydrator->preloadIds($ids, [
+            WorkHydrator::GENRES,
+            WorkHydrator::RATINGS,
+            WorkHydrator::EXTERNAL_IDS,
+        ]);
 
         $byId = [];
         foreach ($works as $work) {

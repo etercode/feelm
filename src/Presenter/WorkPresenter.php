@@ -58,6 +58,28 @@ final class WorkPresenter
     }
 
     /**
+     * Just enough to name a title and link to it.
+     *
+     * Admin tables list works next to something else — a review, a credit — and
+     * one() would drag genres, ratings, credits and seasons along for a poster
+     * and a title. This touches no relation at all, so a page of rows is one
+     * query rather than a preload.
+     *
+     * @return array<string, mixed>
+     */
+    public function compact(Work $work): array
+    {
+        return [
+            'id' => $work->getId(),
+            'type' => $work->getType(),
+            'slug' => $work->getSlug(),
+            'title' => $work->getTitle(),
+            'year' => $work->getYear(),
+            'poster' => $this->urls->media($work->getPoster()),
+        ];
+    }
+
+    /**
      * The ids other sites know this by, so the UI can link out to them.
      *
      * @return array<string, string>

@@ -22,6 +22,27 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
 {
     use TimestampableTrait;
 
+    /**
+     * Everybody has this one; getRoles() appends it rather than storing it, so
+     * it never appears in the json column and cannot be taken away.
+     */
+    public const ROLE_USER = 'ROLE_USER';
+
+    /** Moderates what people write: reviews today, more later. */
+    public const ROLE_MODERATOR = 'ROLE_MODERATOR';
+
+    /** Everything, including who else gets a role. */
+    public const ROLE_ADMIN = 'ROLE_ADMIN';
+
+    /**
+     * What an administrator may hand out. ROLE_USER is deliberately absent —
+     * granting it would be a no-op and revoking it would look like it did
+     * something.
+     *
+     * @var list<string>
+     */
+    public const ASSIGNABLE_ROLES = [self::ROLE_MODERATOR, self::ROLE_ADMIN];
+
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column]
@@ -148,6 +169,41 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
         $this->roles = $roles;
 
         return $this;
+    }
+
+    /**
+     * The stored list, without the implied ROLE_USER.
+     *
+     * The admin UI edits this rather than getRoles(), or every save would write
+     * ROLE_USER back into the column.
+     *
+     * @return list<string>
+     */
+    public function getGrantedRoles(): array
+    {
+        return array_values($this->roles);
+    }
+
+    /**
+     * Whether this account holds a role directly.
+     *
+     * This does not consult role_hierarchy — ROLE_ADMIN implies ROLE_MODERATOR
+     * for the firewall, not here. Callers that mean "may moderate" should ask
+     * for both, which is what isModerator() does.
+     */
+    public function hasRole(string $role): bool
+    {
+        return \in_array($role, $this->roles, true);
+    }
+
+    public function isAdmin(): bool
+    {
+        return $this->hasRole(self::ROLE_ADMIN);
+    }
+
+    public function isModerator(): bool
+    {
+        return $this->hasRole(self::ROLE_MODERATOR) || $this->isAdmin();
     }
 
     public function getPassword(): ?string

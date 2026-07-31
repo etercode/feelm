@@ -4,6 +4,13 @@ security:
         Symfony\Component\Security\Core\User\PasswordAuthenticatedUserInterface: 'auto'
 
     # https://symfony.com/doc/current/security.html#loading-the-user-the-user-provider
+    # Administrators can do anything a moderator can, and both are users. The
+    # firewall resolves this; User::getRoles() still returns only what was
+    # granted, so the admin UI edits the real list rather than the expansion.
+    role_hierarchy:
+        ROLE_ADMIN: [ROLE_MODERATOR]
+        ROLE_MODERATOR: [ROLE_USER]
+
     providers:
         app_user_provider:
             entity:
@@ -51,6 +58,10 @@ security:
         - { path: ^/api/users, methods: [GET], roles: PUBLIC_ACCESS }
         # Crawl progress: counts and titles already public through /api/items.
         - { path: ^/api/crawl, methods: [GET], roles: PUBLIC_ACCESS }
+        # The floor for the admin API. Endpoints that write roles or delete
+        # accounts ask for ROLE_ADMIN themselves, per method. This must stay
+        # above the catch-all below: first match wins.
+        - { path: ^/api/admin, roles: ROLE_MODERATOR }
         - { path: ^/api, roles: IS_AUTHENTICATED_FULLY }
 
 when@test:

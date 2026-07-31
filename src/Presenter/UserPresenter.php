@@ -37,7 +37,42 @@ final class UserPresenter
      */
     public static function self(User $user): array
     {
-        return [...self::one($user), 'email' => $user->getEmail(), 'emailVerified' => $user->isEmailVerified()];
+        return [
+            ...self::one($user),
+            'email' => $user->getEmail(),
+            'emailVerified' => $user->isEmailVerified(),
+            /*
+             * What was granted, not what the firewall expands it to: the front
+             * end only needs to know whether to offer the admin link, and
+             * shipping the expansion would imply the browser can be trusted
+             * with the decision. Every /api/admin route checks again.
+             */
+            'roles' => $user->getGrantedRoles(),
+        ];
+    }
+
+    /**
+     * An account as the admin table sees it: the private columns, the state,
+     * and — when the caller has counted them — what the account has done.
+     *
+     * @param array{entries?: int, reviews?: int, followers?: int, following?: int} $stats
+     *
+     * @return array<string, mixed>
+     */
+    public static function admin(User $user, array $stats = []): array
+    {
+        return [
+            ...self::self($user),
+            'createdAt' => $user->getCreatedAt()?->format(\DateTimeInterface::ATOM),
+            'updatedAt' => $user->getUpdatedAt()?->format(\DateTimeInterface::ATOM),
+            'deletedAt' => $user->getDeletedAt()?->format(\DateTimeInterface::ATOM),
+            'stats' => [
+                'entries' => $stats['entries'] ?? 0,
+                'reviews' => $stats['reviews'] ?? 0,
+                'followers' => $stats['followers'] ?? 0,
+                'following' => $stats['following'] ?? 0,
+            ],
+        ];
     }
 
     /**

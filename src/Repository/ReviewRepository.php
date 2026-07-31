@@ -80,4 +80,27 @@ class ReviewRepository extends ServiceEntityRepository
     {
         return $this->count(['user' => $user]);
     }
+
+    /**
+     * The latest reviews written anywhere, for the admin overview.
+     *
+     * Author and work are joined in: the presenter reaches for both, and six
+     * rows would otherwise be thirteen queries.
+     *
+     * @return list<Review>
+     */
+    public function findRecent(int $limit = 6): array
+    {
+        /** @var list<Review> $reviews */
+        $reviews = $this->createQueryBuilder('r')
+            ->innerJoin('r.user', 'u')->addSelect('u')
+            ->innerJoin('r.work', 'w')->addSelect('w')
+            ->orderBy('r.createdAt', 'DESC')
+            ->addOrderBy('r.id', 'DESC')
+            ->setMaxResults($limit)
+            ->getQuery()
+            ->getResult();
+
+        return $reviews;
+    }
 }

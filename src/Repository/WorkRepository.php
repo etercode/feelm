@@ -186,6 +186,36 @@ class WorkRepository extends ServiceEntityRepository
     }
 
     /**
+     * The decades a browse filter can usefully offer, newest first.
+     *
+     * Not derived from yearBounds(): the catalogue reports 1966 to 2026, but
+     * the sixties and seventies hold one title each and the eighties none at
+     * all, so a list built from the span offers three decades that return
+     * nothing or nearly nothing.
+     *
+     * One indexed probe per decade rather than a GROUP BY over every row —
+     * 5ms against 268ms, and the answer is the same four decades. The OFFSET
+     * is what makes it "at least fifty", and it stops reading there.
+     *
+     * @return list<int>
+     */
+    public function decades(int $atLeast = 50): array
+    {
+        $rows = $this->getEntityManager()->getConnection()->executeQuery(
+            'SELECT d FROM generate_series(1900, 2100, 10) AS d
+             WHERE EXISTS (
+                 SELECT 1 FROM works w
+                 WHERE w.deleted_at IS NULL AND w.year >= d AND w.year < d + 10
+                 OFFSET :atLeast LIMIT 1
+             )
+             ORDER BY d DESC',
+            ['atLeast' => max(0, $atLeast - 1)],
+        )->fetchFirstColumn();
+
+        return array_map(intval(...), $rows);
+    }
+
+    /**
      * @return list<array{code: string, count: int}>
      */
     public function languages(): array

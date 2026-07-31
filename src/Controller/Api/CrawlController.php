@@ -52,13 +52,13 @@ final class CrawlController extends AbstractController
         // reports — this stays true whether or not a crawl is running.
         $recent = (int) $this->connection->executeQuery(
             sprintf(
-                "SELECT COUNT(*) FROM works WHERE added_at > NOW() - INTERVAL '%d minutes'",
+                "SELECT COUNT(*) FROM works WHERE deleted_at IS NULL AND added_at > NOW() - INTERVAL '%d minutes'",
                 self::RATE_WINDOW_MINUTES,
             ),
         )->fetchOne();
 
         $perMinute = $recent / self::RATE_WINDOW_MINUTES;
-        $lastAdded = $this->connection->executeQuery('SELECT MAX(added_at) FROM works')->fetchOne();
+        $lastAdded = $this->connection->executeQuery('SELECT MAX(added_at) FROM works WHERE deleted_at IS NULL')->fetchOne();
 
         return $this->json([
             'total' => $total,
@@ -94,6 +94,7 @@ final class CrawlController extends AbstractController
 
         $works = $this->works->createQueryBuilder('w')
             ->where('w.type = :type')
+            ->andWhere('w.deletedAt IS NULL')
             ->setParameter('type', 'movie')
             // id breaks ties: added_at has second resolution and a crawl stores
             // far more than one title a second, so ordering on it alone would

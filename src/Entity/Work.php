@@ -24,6 +24,10 @@ use Doctrine\ORM\Mapping as ORM;
 #[ORM\Index(name: 'idx_work_year', columns: ['year'])]
 #[ORM\Index(name: 'idx_work_type_score', columns: ['type', 'external_score'])]
 #[ORM\Index(name: 'idx_work_added_at', columns: ['added_at'])]
+// Partial, because almost every row is NULL: this index exists to make "show
+// me the hidden ones" cheap, not to help the millions of reads that ask for
+// the opposite.
+#[ORM\Index(name: 'idx_work_deleted_at', columns: ['deleted_at'], options: ['where' => '(deleted_at IS NOT NULL)'])]
 class Work
 {
     public const TYPES = ['movie', 'series', 'game', 'book'];
@@ -122,6 +126,23 @@ class Work
 
     #[ORM\Column(type: Types::DATETIME_IMMUTABLE)]
     private ?\DateTimeImmutable $addedAt = null;
+
+    /**
+     * Hidden from the catalog, but still here.
+     *
+     * A work cannot simply be deleted: entries, reviews and seen marks all
+     * cascade from it, so removing one bad row would silently take somebody's
+     * score and their writing with it. Hiding is reversible; that is the whole
+     * point.
+     *
+     * There is no Doctrine filter doing this — every query decides for itself,
+     * which is the convention the rest of this application already follows.
+     * The one place that must NOT check it is lookup by external id: that is
+     * how the crawler recognises a row it made before, and a hidden work it
+     * cannot see is a work it would insert again.
+     */
+    #[ORM\Column(type: Types::DATETIME_IMMUTABLE, nullable: true)]
+    private ?\DateTimeImmutable $deletedAt = null;
 
     /** @var Collection<int, Genre> */
     #[ORM\ManyToMany(targetEntity: Genre::class, inversedBy: 'works')]
@@ -434,6 +455,30 @@ class Work
     public function setAddedAt(\DateTimeImmutable $addedAt): static
     {
         $this->addedAt = $addedAt;
+
+        return $this;
+    }
+
+    public function getDeletedAt(): ?\DateTimeImmutable
+    {
+        return $this->deletedAt;
+    }
+
+    public function setDeletedAt(?\DateTimeImmutable $deletedAt): static
+    {
+        $this->deletedAt = $deletedAt;
+
+        return $this;
+    }
+
+    public function isDeleted(): bool
+    {
+        return null !== $this->deletedAt;
+    }
+
+    public function softDelete(): static
+    {
+        $this->deletedAt = new \DateTimeImmutable();
 
         return $this;
     }

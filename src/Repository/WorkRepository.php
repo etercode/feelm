@@ -20,9 +20,16 @@ class WorkRepository extends ServiceEntityRepository
         parent::__construct($registry, Work::class);
     }
 
-    public function findOneByTypeAndSlug(string $type, string $slug): ?Work
+    /**
+     * The public detail page. Hidden works 404 here, like anything else that
+     * is not in the catalog.
+     *
+     * `$includeDeleted` is for the admin, which is the one caller allowed to
+     * look at a work it has hidden.
+     */
+    public function findOneByTypeAndSlug(string $type, string $slug, bool $includeDeleted = false): ?Work
     {
-        return $this->createQueryBuilder('w')
+        $builder = $this->createQueryBuilder('w')
             ->addSelect('g', 'r', 'x')
             ->leftJoin('w.genres', 'g')
             ->leftJoin('w.ratings', 'r')
@@ -30,12 +37,25 @@ class WorkRepository extends ServiceEntityRepository
             ->andWhere('w.type = :type')
             ->andWhere('w.slug = :slug')
             ->setParameter('type', $type)
-            ->setParameter('slug', $slug)
-            ->getQuery()
-            ->getOneOrNullResult();
+            ->setParameter('slug', $slug);
+
+        if (!$includeDeleted) {
+            $builder->andWhere('w.deletedAt IS NULL');
+        }
+
+        return $builder->getQuery()->getOneOrNullResult();
     }
 
-    /** The only correct way to find a crawled row again. */
+    /**
+     * The only correct way to find a crawled row again.
+     *
+     * Deliberately finds hidden works too, and this is not an oversight: the
+     * crawler asks this question to decide whether it has seen a title before.
+     * Hide a work from it and the next pass concludes the title is missing,
+     * inserts it again, and dies on the unique index over
+     * external_ids (source, external_id). A hidden work must stay findable by
+     * identity — hiding is about the catalog, not about what exists.
+     */
     public function findOneByExternalId(string $source, string $externalId): ?Work
     {
         return $this->createQueryBuilder('w')
@@ -63,6 +83,7 @@ class WorkRepository extends ServiceEntityRepository
         return $this->createQueryBuilder('w')
             ->addSelect('x')
             ->join('w.externalIds', 'x', 'WITH', "x.source = 'tmdb'")
+            ->andWhere('w.deletedAt IS NULL')
             ->andWhere("NOT EXISTS (
                 SELECT 1 FROM App\\Entity\\ExternalId imdb
                 WHERE imdb.work = w AND imdb.source = 'imdb'
@@ -77,6 +98,7 @@ class WorkRepository extends ServiceEntityRepository
     {
         return (int) $this->createQueryBuilder('w')
             ->select('COUNT(w.id)')
+            ->andWhere('w.deletedAt IS NULL')
             ->andWhere('w.type = :type')
             ->setParameter('type', $type)
             ->getQuery()
@@ -95,6 +117,7 @@ class WorkRepository extends ServiceEntityRepository
             ->addSelect('g', 'r')
             ->leftJoin('w.genres', 'g')
             ->leftJoin('w.ratings', 'r')
+            ->andWhere('w.deletedAt IS NULL')
             ->andWhere('w.releaseDate > CURRENT_DATE()')
             ->orderBy('w.releaseDate', 'ASC')
             ->addOrderBy('w.popularity', 'DESC')
@@ -112,7 +135,7 @@ class WorkRepository extends ServiceEntityRepository
     {
         $rows = $this->getEntityManager()->getConnection()->executeQuery(
             "SELECT certification FROM works
-             WHERE COALESCE(certification, '') <> ''
+             WHERE deleted_at IS NULL AND COALESCE(certification, '') <> ''
              GROUP BY certification ORDER BY COUNT(*) DESC LIMIT 20",
         )->fetchFirstColumn();
 
@@ -127,7 +150,7 @@ class WorkRepository extends ServiceEntityRepository
     public function yearBounds(): array
     {
         $row = $this->getEntityManager()->getConnection()->executeQuery(
-            'SELECT MIN(year) AS min, MAX(year) AS max FROM works WHERE year IS NOT NULL',
+            'SELECT MIN(year) AS min, MAX(year) AS max FROM works WHERE deleted_at IS NULL AND year IS NOT NULL',
         )->fetchAssociative();
 
         return [
@@ -143,7 +166,7 @@ class WorkRepository extends ServiceEntityRepository
     {
         $rows = $this->getEntityManager()->getConnection()->executeQuery(
             "SELECT original_language AS code, COUNT(*) AS n FROM works
-             WHERE COALESCE(original_language, '') <> ''
+             WHERE deleted_at IS NULL AND COALESCE(original_language, '') <> ''
              GROUP BY original_language ORDER BY n DESC LIMIT 20",
         )->fetchAllAssociative();
 
@@ -151,5 +174,150 @@ class WorkRepository extends ServiceEntityRepository
             'code' => (string) $row['code'],
             'count' => (int) $row['n'],
         ], $rows);
+    }
+
+    /* -------------------------------------------------------------- admin */
+
+    /**
+     * One page of the admin's works table.
+     *
+     * Built in SQL rather than DQL, for the same reason WorkSearch is: the
+     * useful search here is `title ILIKE '%…%'`, which the gin_trgm index on
+     * works.title can answer, and DQL has no ILIKE. Written as LOWER(title)
+     * LIKE instead it would be a sequential scan of 412k rows on every
+     * keystroke.
+     *
+     * Ids come back first and the entities are loaded from them, so paging
+     * happens on single rows and no fetch-join can multiply them.
+     *
+     * @param array{q?: string|null, type?: string|null, status?: string|null, genre?: string|null, missing?: string|null, yearFrom?: int|null, yearTo?: int|null, sort?: string|null} $filters
+     *
+     * @return array{items: list<Work>, total: int}
+     */
+    public function adminPage(array $filters, int $offset, int $limit): array
+    {
+        [$where, $params] = $this->adminConditions($filters);
+        $connection = $this->getEntityManager()->getConnection();
+
+        $total = (int) $connection->executeQuery(
+            'SELECT COUNT(*) FROM works w WHERE '.$where,
+            $params,
+        )->fetchOne();
+
+        if (0 === $total) {
+            return ['items' => [], 'total' => 0];
+        }
+
+        $ids = $connection->executeQuery(
+            'SELECT w.id FROM works w WHERE '.$where.'
+             ORDER BY '.$this->adminOrder($filters['sort'] ?? null).'
+             LIMIT :limit OFFSET :offset',
+            [...$params, 'limit' => $limit, 'offset' => $offset],
+        )->fetchFirstColumn();
+
+        $ids = array_map(intval(...), $ids);
+        if ([] === $ids) {
+            return ['items' => [], 'total' => $total];
+        }
+
+        /** @var list<Work> $works */
+        $works = $this->createQueryBuilder('w')
+            ->andWhere('w.id IN (:ids)')
+            ->setParameter('ids', $ids)
+            ->getQuery()
+            ->getResult();
+
+        // Back into the order the page was selected in.
+        $byId = [];
+        foreach ($works as $work) {
+            $byId[(int) $work->getId()] = $work;
+        }
+
+        $ordered = [];
+        foreach ($ids as $id) {
+            if (isset($byId[$id])) {
+                $ordered[] = $byId[$id];
+            }
+        }
+
+        return ['items' => $ordered, 'total' => $total];
+    }
+
+    /**
+     * @param array<string, mixed> $filters
+     *
+     * @return array{0: string, 1: array<string, mixed>}
+     */
+    private function adminConditions(array $filters): array
+    {
+        $clauses = [];
+        $params = [];
+
+        // The admin is the only reader allowed to ask for hidden rows, so this
+        // is the only place the default can be overridden.
+        $clauses[] = match ($filters['status'] ?? null) {
+            'deleted' => 'w.deleted_at IS NOT NULL',
+            'all' => 'TRUE',
+            default => 'w.deleted_at IS NULL',
+        };
+
+        $term = trim((string) ($filters['q'] ?? ''));
+        if ('' !== $term) {
+            // ILIKE, not LOWER(...) LIKE: only the former can use the trigram
+            // index, and this table has 412k rows.
+            $clauses[] = '(w.title ILIKE :q OR w.original_title ILIKE :q OR w.slug ILIKE :q)';
+            $params['q'] = '%'.$term.'%';
+        }
+
+        if (null !== ($filters['type'] ?? null)) {
+            $clauses[] = 'w.type = :type';
+            $params['type'] = $filters['type'];
+        }
+
+        if (null !== ($filters['genre'] ?? null)) {
+            $clauses[] = 'EXISTS (SELECT 1 FROM work_genre wg JOIN genres g ON g.id = wg.genre_id
+                                  WHERE wg.work_id = w.id AND g.slug = :genre)';
+            $params['genre'] = $filters['genre'];
+        }
+
+        if (null !== ($filters['yearFrom'] ?? null)) {
+            $clauses[] = 'w.year >= :yearFrom';
+            $params['yearFrom'] = $filters['yearFrom'];
+        }
+
+        if (null !== ($filters['yearTo'] ?? null)) {
+            $clauses[] = 'w.year <= :yearTo';
+            $params['yearTo'] = $filters['yearTo'];
+        }
+
+        // "What needs fixing" — the reason to open this table at all.
+        $missing = $filters['missing'] ?? null;
+        if (null !== $missing) {
+            $clauses[] = match ($missing) {
+                'poster' => 'w.poster IS NULL',
+                'overview' => "COALESCE(w.overview, '') = ''",
+                'year' => 'w.year IS NULL',
+                'genre' => 'NOT EXISTS (SELECT 1 FROM work_genre wg WHERE wg.work_id = w.id)',
+                'imdb' => "NOT EXISTS (SELECT 1 FROM external_ids x WHERE x.work_id = w.id AND x.source = 'imdb')",
+                default => 'TRUE',
+            };
+        }
+
+        return [implode(' AND ', $clauses), $params];
+    }
+
+    /** Sorting the admin table. Anything unrecognised falls back to popularity. */
+    private function adminOrder(?string $sort): string
+    {
+        // A stable tiebreak on every branch, so page 2 cannot repeat page 1.
+        return match ($sort) {
+            'title' => 'w.title ASC, w.id DESC',
+            'year' => 'w.year DESC NULLS LAST, w.id DESC',
+            'oldest' => 'w.year ASC NULLS LAST, w.id DESC',
+            'added' => 'w.added_at DESC, w.id DESC',
+            'score' => 'w.external_score DESC NULLS LAST, w.id DESC',
+            'hidden' => 'w.deleted_at DESC NULLS LAST, w.id DESC',
+            default => 'w.popularity DESC NULLS LAST, w.id DESC',
+        };
     }
 }

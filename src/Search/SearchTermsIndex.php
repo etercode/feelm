@@ -37,7 +37,7 @@ final class SearchTermsIndex
                  SELECT unnest(string_to_array(
                      regexp_replace(lower(coalesce(title, \'\') || \' \' || coalesce(original_title, \'\')), \'[^[:alnum:]]+\', \' \', \'g\'),
                      \' \'
-                 )) AS term FROM works
+                 )) AS term FROM works WHERE deleted_at IS NULL
                  UNION ALL
                  SELECT unnest(string_to_array(
                      regexp_replace(lower(name), \'[^[:alnum:]]+\', \' \', \'g\'),

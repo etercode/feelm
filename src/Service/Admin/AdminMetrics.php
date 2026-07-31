@@ -23,15 +23,19 @@ final class AdminMetrics
     }
 
     /**
+     * `works` counts what the catalog shows; `worksHidden` is what has been
+     * soft-deleted out of it. The two together are every row in the table.
+     *
      * @return array{
-     *     works: int, people: int, credits: int, reviews: int, entries: int,
-     *     genres: int, follows: int, worksByType: array<string, int>,
+     *     works: int, worksHidden: int, people: int, credits: int, reviews: int,
+     *     entries: int, genres: int, follows: int, worksByType: array<string, int>,
      * }
      */
     public function totals(): array
     {
         $row = $this->connection->fetchAssociative(
-            'SELECT (SELECT COUNT(*) FROM works) AS works,
+            'SELECT (SELECT COUNT(*) FROM works WHERE deleted_at IS NULL) AS works,
+                    (SELECT COUNT(*) FROM works WHERE deleted_at IS NOT NULL) AS works_hidden,
                     (SELECT COUNT(*) FROM people) AS people,
                     (SELECT COUNT(*) FROM credits) AS credits,
                     (SELECT COUNT(*) FROM reviews) AS reviews,
@@ -42,6 +46,7 @@ final class AdminMetrics
 
         return [
             'works' => (int) ($row['works'] ?? 0),
+            'worksHidden' => (int) ($row['works_hidden'] ?? 0),
             'people' => (int) ($row['people'] ?? 0),
             'credits' => (int) ($row['credits'] ?? 0),
             'reviews' => (int) ($row['reviews'] ?? 0),
@@ -58,7 +63,7 @@ final class AdminMetrics
     private function worksByType(): array
     {
         $rows = $this->connection->fetchAllAssociative(
-            'SELECT type, COUNT(*) AS n FROM works GROUP BY type ORDER BY n DESC',
+            'SELECT type, COUNT(*) AS n FROM works WHERE deleted_at IS NULL GROUP BY type ORDER BY n DESC',
         );
 
         $counts = [];
@@ -78,8 +83,8 @@ final class AdminMetrics
     public function recentActivity(): array
     {
         $row = $this->connection->fetchAssociative(
-            "SELECT (SELECT COUNT(*) FROM works WHERE added_at >= NOW() - INTERVAL '1 day') AS works_today,
-                    (SELECT COUNT(*) FROM works WHERE added_at >= NOW() - INTERVAL '7 days') AS works_week,
+            "SELECT (SELECT COUNT(*) FROM works WHERE deleted_at IS NULL AND added_at >= NOW() - INTERVAL '1 day') AS works_today,
+                    (SELECT COUNT(*) FROM works WHERE deleted_at IS NULL AND added_at >= NOW() - INTERVAL '7 days') AS works_week,
                     (SELECT COUNT(*) FROM users WHERE created_at >= NOW() - INTERVAL '7 days' AND deleted_at IS NULL) AS users_week,
                     (SELECT COUNT(*) FROM reviews WHERE created_at >= NOW() - INTERVAL '7 days') AS reviews_week",
         ) ?: [];

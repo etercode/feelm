@@ -49,6 +49,7 @@ class EntryRepository extends ServiceEntityRepository
             ->innerJoin('e.user', 'u')->addSelect('u')
             ->innerJoin('e.work', 'w')->addSelect('w')
             ->andWhere('u.deletedAt IS NULL')
+            ->andWhere('w.deletedAt IS NULL')
             ->orderBy('e.updatedAt', 'DESC')
             ->setMaxResults($limit);
 
@@ -85,6 +86,7 @@ class EntryRepository extends ServiceEntityRepository
             )
             ->innerJoin('e.work', 'w')
             ->andWhere('e.user = :user')
+            ->andWhere('w.deletedAt IS NULL')
             ->setParameter('user', $user)
             ->groupBy('w.type')
             ->addGroupBy('e.status')
@@ -163,6 +165,7 @@ class EntryRepository extends ServiceEntityRepository
             ->innerJoin('e.work', 'w')
             ->addSelect('w')
             ->andWhere('e.user = :user')
+            ->andWhere('w.deletedAt IS NULL')
             ->andWhere("e.status = 'active'")
             ->setParameter('user', $user)
             ->orderBy('e.updatedAt', 'DESC')
@@ -184,6 +187,7 @@ class EntryRepository extends ServiceEntityRepository
             ->addSelect('w')
             ->andWhere('e.user = :user')
             ->andWhere('e.rating IS NOT NULL')
+            ->andWhere('w.deletedAt IS NULL')
             ->andWhere('w.backdrop IS NOT NULL')
             ->setParameter('user', $user)
             ->orderBy('e.rating', 'DESC')
@@ -214,6 +218,8 @@ class EntryRepository extends ServiceEntityRepository
                 Join::WITH,
                 'o.work = e.work AND o.user = :other',
             )
+            ->innerJoin('e.work', 'w')
+            ->andWhere('w.deletedAt IS NULL')
             ->andWhere('e.user = :viewer')
             ->setParameter('viewer', $viewer)
             ->setParameter('other', $other)
@@ -236,6 +242,8 @@ class EntryRepository extends ServiceEntityRepository
                 Join::WITH,
                 'o.work = e.work AND o.user = :other',
             )
+            ->innerJoin('e.work', 'w')
+            ->andWhere('w.deletedAt IS NULL')
             ->andWhere('e.user = :viewer')
             ->setParameter('viewer', $viewer)
             ->setParameter('other', $other)
@@ -254,6 +262,10 @@ class EntryRepository extends ServiceEntityRepository
         $builder = $this->createQueryBuilder('e')
             ->innerJoin('e.work', 'w')
             ->andWhere('e.user = :user')
+            // A work the admin has hidden leaves every shelf that held it.
+            // The entry stays in the database and comes back if the work is
+            // restored — it just stops being something anybody can see.
+            ->andWhere('w.deletedAt IS NULL')
             ->setParameter('user', $user);
 
         if (null !== ($filters['type'] ?? null)) {

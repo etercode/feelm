@@ -26,6 +26,12 @@ class ReviewRepository extends ServiceEntityRepository
     }
 
     /**
+     * Reviews of one title.
+     *
+     * No deleted_at check on the work: it arrives as a parameter, and the only
+     * public route to one is findOneByTypeAndSlug, which already refuses hidden
+     * rows. There is no `w` alias here to test anyway.
+     *
      * @return list<Review>
      */
     public function findByWork(Work $work): array
@@ -48,6 +54,7 @@ class ReviewRepository extends ServiceEntityRepository
         $builder = $this->createQueryBuilder('r')
             ->innerJoin('r.work', 'w')->addSelect('w')
             ->andWhere('r.user = :user')
+            ->andWhere('w.deletedAt IS NULL')
             ->setParameter('user', $user)
             ->orderBy('r.updatedAt', 'DESC');
 
@@ -97,6 +104,7 @@ class ReviewRepository extends ServiceEntityRepository
         $reviews = $this->createQueryBuilder('r')
             ->innerJoin('r.user', 'u')->addSelect('u')
             ->innerJoin('r.work', 'w')->addSelect('w')
+            ->andWhere('w.deletedAt IS NULL')
             ->orderBy('r.createdAt', 'DESC')
             ->addOrderBy('r.id', 'DESC')
             ->setMaxResults($limit)

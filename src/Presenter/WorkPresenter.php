@@ -80,6 +80,60 @@ final class WorkPresenter
     }
 
     /**
+     * One row of the admin's works table.
+     *
+     * Scalars only — deliberately touches no relation. Genres, ratings, credits
+     * and external ids are all lazy, and a page of fifty rows reaching for any
+     * of them is fifty extra queries. The row carries what a table cell can
+     * show; the rest arrives when a work is opened.
+     *
+     * @return array<string, mixed>
+     */
+    public function adminRow(Work $work): array
+    {
+        return [
+            ...$this->compact($work),
+            'originalTitle' => $work->getOriginalTitle(),
+            'popularity' => $work->getPopularity(),
+            'externalScore' => $work->getExternalScore(),
+            'voteCount' => $work->getVoteCount(),
+            'certification' => $work->getCertification(),
+            'originalLanguage' => $work->getOriginalLanguage(),
+            'runtimeMinutes' => $work->getRuntimeMinutes(),
+            'hasOverview' => '' !== trim((string) $work->getOverview()),
+            'addedAt' => $work->getAddedAt()?->format(\DateTimeInterface::ATOM),
+            'deletedAt' => $work->getDeletedAt()?->format(\DateTimeInterface::ATOM),
+            'hidden' => $work->isDeleted(),
+        ];
+    }
+
+    /**
+     * A work opened in the admin: the row, plus everything editable and the
+     * relations worth seeing. One work, so the lazy loads are affordable.
+     *
+     * @return array<string, mixed>
+     */
+    public function adminOne(Work $work): array
+    {
+        return [
+            ...$this->adminRow($work),
+            'tagline' => $work->getTagline(),
+            'overview' => $work->getOverview(),
+            'backdrop' => $this->urls->media($work->getBackdrop()),
+            'posterPath' => $work->getPoster(),
+            'backdropPath' => $work->getBackdrop(),
+            'releaseDate' => $work->getReleaseDate()?->format('Y-m-d'),
+            'pageCount' => $work->getPageCount(),
+            'publisher' => $work->getPublisher(),
+            'genres' => $work->getGenreNames(),
+            'ratings' => $this->ratings($work),
+            'externalIds' => $this->externalIds($work),
+            'source' => $work->getSource(),
+            'isUpcoming' => $work->isUpcoming(),
+        ];
+    }
+
+    /**
      * The ids other sites know this by, so the UI can link out to them.
      *
      * @return array<string, string>

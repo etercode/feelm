@@ -269,7 +269,13 @@ final class WorkSearch
      */
     private function conditions(SearchCriteria $criteria): array
     {
-        $clauses = ['TRUE'];
+        /*
+         * Hidden works are hidden here, once, for everything: the count, the
+         * id list, all three facets and the spelling suggestion every build
+         * their WHERE from this method, so none of them can disagree with
+         * another about what the catalog contains.
+         */
+        $clauses = ['w.deleted_at IS NULL'];
         $params = [];
         $types = [];
 

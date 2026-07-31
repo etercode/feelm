@@ -42,6 +42,8 @@ security:
     access_control:
         - { path: ^/api/register, roles: PUBLIC_ACCESS }
         - { path: ^/api/login, roles: PUBLIC_ACCESS }
+        # Signing in with Google: the ID token in the body is the credential.
+        - { path: ^/api/auth/google, methods: [POST], roles: PUBLIC_ACCESS }
         - { path: ^/api/token/refresh, roles: PUBLIC_ACCESS }
         - { path: ^/api/items, methods: [GET], roles: PUBLIC_ACCESS }
         - { path: ^/api/search, methods: [GET], roles: PUBLIC_ACCESS }

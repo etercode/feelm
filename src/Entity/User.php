@@ -15,6 +15,9 @@ use Symfony\Component\Security\Core\User\UserInterface;
 #[ORM\Table(name: 'users')]
 #[ORM\HasLifecycleCallbacks]
 #[ORM\UniqueConstraint(name: 'uniq_user_username', columns: ['username'], options: ['where' => '(deleted_at IS NULL)'])]
+// Parenthesised exactly as Postgres stores it, or schema:validate reports a
+// difference on every run and a diff would keep proposing to rebuild it.
+#[ORM\UniqueConstraint(name: 'uniq_user_email', columns: ['email'], options: ['where' => '((deleted_at IS NULL) AND (email IS NOT NULL))'])]
 class User implements UserInterface, PasswordAuthenticatedUserInterface
 {
     use TimestampableTrait;
@@ -33,8 +36,37 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
     #[ORM\Column(type: Types::JSON)]
     private array $roles = [];
 
-    #[ORM\Column]
+    /**
+     * Null for accounts that only ever sign in through Google. Those cannot log
+     * in with a password until they set one, which is what UserChecker and the
+     * "set a password" branch of /api/me/password exist for.
+     */
+    #[ORM\Column(nullable: true)]
     private ?string $password = null;
+
+    /**
+     * Unique among live accounts, like the username. Nullable because accounts
+     * that predate sign-up asking for one still exist; every new account has
+     * one.
+     */
+    #[ORM\Column(length: 180, nullable: true)]
+    private ?string $email = null;
+
+    /**
+     * Whether somebody has proven they own the address. Only Google sets this
+     * true today — a password sign-up is taken on trust until there is a way to
+     * send mail, which is why an unverified address never links an account.
+     */
+    #[ORM\Column(options: ['default' => false])]
+    private bool $emailVerified = false;
+
+    /**
+     * Set on accounts created through Google, which arrive without a username.
+     * They get a generated one and a single chance to change it, because the
+     * handle is in every link to their profile from then on.
+     */
+    #[ORM\Column(options: ['default' => false])]
+    private bool $handlePending = false;
 
     #[ORM\Column(length: 100)]
     private ?string $name = null;
@@ -123,9 +155,51 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
         return $this->password;
     }
 
-    public function setPassword(string $password): static
+    public function setPassword(?string $password): static
     {
         $this->password = $password;
+
+        return $this;
+    }
+
+    /** Whether this account can be signed into with a password at all. */
+    public function hasPassword(): bool
+    {
+        return null !== $this->password && '' !== $this->password;
+    }
+
+    public function getEmail(): ?string
+    {
+        return $this->email;
+    }
+
+    public function setEmail(?string $email): static
+    {
+        $this->email = null === $email ? null : mb_strtolower(trim($email));
+
+        return $this;
+    }
+
+    public function isEmailVerified(): bool
+    {
+        return $this->emailVerified;
+    }
+
+    public function setEmailVerified(bool $emailVerified): static
+    {
+        $this->emailVerified = $emailVerified;
+
+        return $this;
+    }
+
+    public function isHandlePending(): bool
+    {
+        return $this->handlePending;
+    }
+
+    public function setHandlePending(bool $handlePending): static
+    {
+        $this->handlePending = $handlePending;
 
         return $this;
     }

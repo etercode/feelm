@@ -13,6 +13,11 @@ readonly class RegisterRequest
         public string $username = '',
 
         #[Assert\NotBlank]
+        #[Assert\Email(message: 'That does not look like an email address.')]
+        #[Assert\Length(max: 180)]
+        public string $email = '',
+
+        #[Assert\NotBlank]
         #[Assert\Length(min: 8, max: 4096)]
         public string $password = '',
 

@@ -26,9 +26,14 @@ class RegistrationController extends AbstractController
             return $this->json(['error' => 'username_already_used'], Response::HTTP_CONFLICT);
         }
 
+        if ($userRepository->existsActiveByEmail($payload->email)) {
+            return $this->json(['error' => 'email_already_used'], Response::HTTP_CONFLICT);
+        }
+
         $user = (new User())
             ->setUsername($payload->username)
             ->setName($payload->name)
+            ->setEmail($payload->email)
             ->setTagline($payload->tagline);
 
         $user->setPassword($passwordHasher->hashPassword($user, $payload->password));

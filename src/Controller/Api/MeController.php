@@ -3,9 +3,11 @@
 namespace App\Controller\Api;
 
 use App\Dto\ChangePasswordRequest;
+use App\Dto\ChooseHandleRequest;
 use App\Dto\UpdateProfileRequest;
 use App\Entity\User;
 use App\Presenter\UserPresenter;
+use App\Repository\UserRepository;
 use App\Service\User\AvatarStorage;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -22,7 +24,7 @@ class MeController extends AbstractController
     #[Route('/api/me', name: 'api_me', methods: ['GET'])]
     public function me(#[CurrentUser] User $user): JsonResponse
     {
-        return $this->json(UserPresenter::one($user));
+        return $this->json(UserPresenter::self($user));
     }
 
     #[Route('/api/me', name: 'api_me_update', methods: ['PATCH'], format: 'json')]
@@ -39,7 +41,37 @@ class MeController extends AbstractController
 
         $entityManager->flush();
 
-        return $this->json(UserPresenter::one($user));
+        return $this->json(UserPresenter::self($user));
+    }
+
+    /**
+     * The handle a Google-created account was given, changed once.
+     *
+     * Only while `handlePending` is set. After that the answer is no, for the
+     * same reason sign-up never offered it: the handle is in every link anybody
+     * has to the profile.
+     */
+    #[Route('/api/me/username', name: 'api_me_username', methods: ['POST'], format: 'json')]
+    public function username(
+        #[MapRequestPayload] ChooseHandleRequest $payload,
+        #[CurrentUser] User $user,
+        UserRepository $users,
+        EntityManagerInterface $entityManager,
+    ): JsonResponse {
+        if (!$user->isHandlePending()) {
+            return $this->json(['error' => 'handle_already_set'], Response::HTTP_CONFLICT);
+        }
+
+        $wanted = trim($payload->username);
+
+        if ($wanted !== $user->getUsername() && $users->existsActiveByUsername($wanted)) {
+            return $this->json(['error' => 'username_already_used'], Response::HTTP_CONFLICT);
+        }
+
+        $user->setUsername($wanted)->setHandlePending(false);
+        $entityManager->flush();
+
+        return $this->json(UserPresenter::self($user));
     }
 
     #[Route('/api/me/password', name: 'api_me_password', methods: ['POST'], format: 'json')]
@@ -49,6 +81,19 @@ class MeController extends AbstractController
         UserPasswordHasherInterface $passwordHasher,
         EntityManagerInterface $entityManager,
     ): JsonResponse {
+        /*
+         * An account that signed up through Google has no password to confirm.
+         * Asking for one it has never had would leave it unable to set one at
+         * all — the bearer token is the proof here, which is the same proof
+         * every other write on this controller accepts.
+         */
+        if (!$user->hasPassword()) {
+            $user->setPassword($passwordHasher->hashPassword($user, $payload->newPassword));
+            $entityManager->flush();
+
+            return $this->json(null, Response::HTTP_NO_CONTENT);
+        }
+
         if (!$passwordHasher->isPasswordValid($user, $payload->currentPassword)) {
             return $this->json(['error' => 'wrong_password'], Response::HTTP_FORBIDDEN);
         }
@@ -86,7 +131,7 @@ class MeController extends AbstractController
 
         $entityManager->flush();
 
-        return $this->json(UserPresenter::one($user));
+        return $this->json(UserPresenter::self($user));
     }
 
     #[Route('/api/me/avatar', name: 'api_me_avatar_delete', methods: ['DELETE'])]
@@ -99,7 +144,7 @@ class MeController extends AbstractController
         $user->setAvatar(null);
         $entityManager->flush();
 
-        return $this->json(UserPresenter::one($user));
+        return $this->json(UserPresenter::self($user));
     }
 
     /** Cleared inputs arrive as empty strings; the columns want null. */

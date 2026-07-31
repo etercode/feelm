@@ -25,4 +25,15 @@ class UserRepository extends ServiceEntityRepository
     {
         return $this->count(['username' => $username, 'deletedAt' => null]) > 0;
     }
+
+    /** Addresses are stored folded, so the lookup folds too. */
+    public function findOneActiveByEmail(string $email): ?User
+    {
+        return $this->findOneBy(['email' => mb_strtolower(trim($email)), 'deletedAt' => null]);
+    }
+
+    public function existsActiveByEmail(string $email): bool
+    {
+        return $this->count(['email' => mb_strtolower(trim($email)), 'deletedAt' => null]) > 0;
+    }
 }

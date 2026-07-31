@@ -20,7 +20,24 @@ final class UserPresenter
             'location' => $user->getLocation(),
             'avatar' => $user->getAvatar(),
             'joinedAt' => $user->getCreatedAt()?->format('Y-m-d'),
+            /*
+             * Only meaningful about yourself. They ride along on the public
+             * profile too, which is how the shape stays one shape — the address
+             * itself never does, and that is the part that matters.
+             */
+            'hasPassword' => $user->hasPassword(),
+            'handlePending' => $user->isHandlePending(),
         ];
+    }
+
+    /**
+     * The signed-in person's own record, with the things only they may see.
+     *
+     * @return array<string, mixed>
+     */
+    public static function self(User $user): array
+    {
+        return [...self::one($user), 'email' => $user->getEmail(), 'emailVerified' => $user->isEmailVerified()];
     }
 
     /**

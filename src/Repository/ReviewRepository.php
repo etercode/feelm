@@ -41,15 +41,19 @@ class ReviewRepository extends ServiceEntityRepository
     /**
      * @return list<Review>
      */
-    public function findByUser(User $user): array
+    public function findByUser(User $user, ?int $limit = null): array
     {
-        return $this->createQueryBuilder('r')
+        $builder = $this->createQueryBuilder('r')
             ->innerJoin('r.work', 'w')->addSelect('w')
             ->andWhere('r.user = :user')
             ->setParameter('user', $user)
-            ->orderBy('r.updatedAt', 'DESC')
-            ->getQuery()
-            ->getResult();
+            ->orderBy('r.updatedAt', 'DESC');
+
+        if (null !== $limit) {
+            $builder->setMaxResults($limit);
+        }
+
+        return $builder->getQuery()->getResult();
     }
 
     /**

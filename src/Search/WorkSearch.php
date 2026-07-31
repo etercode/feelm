@@ -3,6 +3,7 @@
 namespace App\Search;
 
 use App\Entity\Work;
+use App\Service\Catalog\WorkHydrator;
 use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\ParameterType;
@@ -27,6 +28,7 @@ final class WorkSearch
 
     public function __construct(
         private readonly EntityManagerInterface $entityManager,
+        private readonly WorkHydrator $hydrator,
     ) {
     }
 
@@ -505,33 +507,6 @@ final class WorkSearch
      *
      * @return list<Work>
      */
-    /**
-     * Initialises one collection across every work in the page, in one query.
-     *
-     * The works are already managed, so selecting them again with the
-     * association joined attaches the loaded collection to the instances the
-     * caller is holding. Nothing is returned: the point is the side effect.
-     *
-     * @param list<int> $ids
-     * @param string    $association property on Work
-     * @param string|null $nested    property on the associated entity to join too
-     */
-    private function loadCollection(array $ids, string $association, ?string $nested = null): void
-    {
-        $builder = $this->entityManager->createQueryBuilder()
-            ->select('w', 'a')
-            ->from(Work::class, 'w')
-            ->leftJoin('w.'.$association, 'a')
-            ->where('w.id IN (:ids)')
-            ->setParameter('ids', $ids);
-
-        if (null !== $nested) {
-            $builder->addSelect('n')->leftJoin('a.'.$nested, 'n');
-        }
-
-        $builder->getQuery()->getResult();
-    }
-
     private function hydrate(array $ids): array
     {
         if ([] === $ids) {
@@ -547,22 +522,8 @@ final class WorkSearch
             ->getQuery()
             ->getResult();
 
-        /*
-         * Everything the presenter reads, loaded up front.
-         *
-         * Without this the presenter walks each work's collections and Doctrine
-         * fetches them one work at a time — and one person at a time behind the
-         * credits, which is the expensive part. A page of 48 films cost about
-         * 2,200 queries and a second and a half; batched, it is five queries.
-         *
-         * One query per collection rather than one query joining all of them:
-         * joined together they multiply, so a film with 3 genres, 2 ratings and
-         * 14 credits would come back as 84 rows repeating the same film.
-         */
-        $this->loadCollection($ids, 'genres');
-        $this->loadCollection($ids, 'ratings');
-        $this->loadCollection($ids, 'externalIds');
-        $this->loadCollection($ids, 'credits', 'person');
+        // Everything the presenter reads, loaded up front — see WorkHydrator.
+        $this->hydrator->preloadIds($ids);
 
         $byId = [];
         foreach ($works as $work) {

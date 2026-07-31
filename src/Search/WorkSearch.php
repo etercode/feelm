@@ -26,6 +26,13 @@ final class WorkSearch
     /** Below this many results a correction is worth offering. */
     private const SUGGEST_BELOW = 5;
 
+    /**
+     * Per-query answers from needsFuzzy(), for the life of one request.
+     *
+     * @var array<string, bool>
+     */
+    private array $fuzzy = [];
+
     public function __construct(
         private readonly EntityManagerInterface $entityManager,
         private readonly WorkHydrator $hydrator,
@@ -143,6 +150,31 @@ final class WorkSearch
     private function connection(): Connection
     {
         return $this->entityManager->getConnection();
+    }
+
+    /**
+     * Whether the fuzzy title match is worth adding to a query.
+     *
+     * Only when full text finds nothing at all — which is the case the fallback
+     * was written for, a misspelling that still has to return something.
+     *
+     * Deliberately asks about the text alone, ignoring every other filter, so
+     * the answer depends only on the words typed. The body of a search and its
+     * facet counts are built from separate calls to conditions(); if they could
+     * disagree about whether the net was cast, the facets would add up to more
+     * than the total on the page.
+     *
+     * Memoised because one request asks four times over: the count, the row
+     * list, and each facet.
+     */
+    private function needsFuzzy(string $tsquery): bool
+    {
+        return $this->fuzzy[$tsquery] ??= !(bool) $this->connection()->executeQuery(
+            "SELECT 1 FROM works w
+             WHERE w.deleted_at IS NULL AND w.search_vector @@ to_tsquery('simple', :tsquery)
+             LIMIT 1",
+            ['tsquery' => $tsquery],
+        )->fetchOne();
     }
 
     /**
@@ -301,8 +333,17 @@ final class WorkSearch
              * Full text first; trigram similarity on the title is the safety
              * net for a misspelling that still has to return something. Both
              * are index-backed.
+             *
+             * The net is only cast when full text came back empty. Held open
+             * always, it was the most expensive thing in a search: the trigram
+             * index is lossy, so every loose match has to be fetched from the
+             * heap and re-tested, and for "star" that meant reading 20,169
+             * candidate rows to keep 3,135 of them. It added 204 results to
+             * 25,662 and three quarters again to the time.
              */
-            $clauses[] = '(w.search_vector @@ query.q OR w.title % :qtrgm)';
+            $clauses[] = $this->needsFuzzy($params['tsquery'])
+                ? '(w.search_vector @@ query.q OR w.title % :qtrgm)'
+                : 'w.search_vector @@ query.q';
         }
 
         if ([] !== $criteria->types) {

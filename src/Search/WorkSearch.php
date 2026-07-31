@@ -48,7 +48,7 @@ final class WorkSearch
         [$where, $params, $types] = $this->conditions($criteria);
 
         $total = (int) $this->connection()->executeQuery(
-            'SELECT COUNT(DISTINCT w.id) FROM works w '.$this->joins($criteria).' WHERE '.$where,
+            'SELECT COUNT(*) FROM works w '.$this->joins($criteria).' WHERE '.$where,
             $params,
             $types,
         )->fetchOne();
@@ -180,7 +180,14 @@ final class WorkSearch
     {
         $order = $this->orderExpressions($criteria);
 
-        $sql = 'SELECT DISTINCT w.id, '.$order['select'].'
+        /*
+         * Not DISTINCT. The only thing joined is the lateral carrying the
+         * parsed tsquery, which is a single row — every genre, rating, person
+         * and credit filter is an EXISTS or a scalar subquery in the WHERE, so
+         * no row can appear twice. Deduping anyway cost the sort: with it,
+         * Postgres spilled 12 MB to disk; without, it is a 26 kB top-N heap.
+         */
+        $sql = 'SELECT w.id, '.$order['select'].'
                 FROM works w '.$this->joins($criteria).'
                 WHERE '.$where.'
                 ORDER BY '.$order['order'].'
@@ -199,26 +206,20 @@ final class WorkSearch
     /**
      * SELECT and ORDER BY fragments for the requested sort.
      *
-     * The query is DISTINCT — the genre and credit joins can each match a work
-     * more than once — and Postgres will only order a DISTINCT result by
-     * expressions that appear in the select list. So every sort key is selected
-     * under an alias and the ORDER BY refers to aliases only.
+     * Only the key being sorted on is selected. Every key used to be, which
+     * cost more than it looks: the row list was SELECT DISTINCT, and Postgres
+     * dedupes by sorting on every selected column — so six keys meant sorting
+     * 412k rows on six columns and spilling twelve megabytes to disk, to
+     * return twenty-four ids ordered by one of them. It also evaluated the
+     * IMDb subquery on every request that was not sorted by IMDb.
      *
      * @return array{select: string, order: string}
      */
     private function orderExpressions(SearchCriteria $criteria): array
     {
-        $shared = 'w.external_score AS s_score,
-                   w.popularity AS s_pop,
-                   w.release_date AS s_released,
-                   w.added_at AS s_added,
-                   lower(w.title) AS s_title,
-                   (SELECT r.rating FROM work_ratings r
-                    WHERE r.work_id = w.id AND r.source = \'imdb\') AS s_imdb';
-
         if ('relevance' === $criteria->sort && $criteria->hasQuery()) {
             return [
-                'select' => $shared.',
+                'select' => 'w.popularity AS s_pop,
                     ts_rank_cd(w.search_vector, query.q) AS s_rank,
                     (lower(w.title) = lower(:qtext)) AS s_exact,
                     (lower(w.title) LIKE lower(:qprefix)) AS s_prefix,
@@ -229,22 +230,25 @@ final class WorkSearch
             ];
         }
 
-        $orders = [
-            'score' => 's_score DESC NULLS LAST',
+        $keys = [
+            'score' => ['w.external_score AS s_score', 's_score DESC NULLS LAST'],
             // Unrated titles sort last rather than pretending to be zero.
-            'imdb' => 's_imdb DESC NULLS LAST',
-            'popularity' => 's_pop DESC NULLS LAST',
-            'newest' => 's_released DESC NULLS LAST',
-            'oldest' => 's_released ASC NULLS LAST',
-            'title' => 's_title ASC',
-            'added' => 's_added DESC',
-            'relevance' => 's_pop DESC NULLS LAST',
+            'imdb' => [
+                "(SELECT r.rating FROM work_ratings r
+                  WHERE r.work_id = w.id AND r.source = 'imdb') AS s_imdb",
+                's_imdb DESC NULLS LAST',
+            ],
+            'popularity' => ['w.popularity AS s_pop', 's_pop DESC NULLS LAST'],
+            'newest' => ['w.release_date AS s_released', 's_released DESC NULLS LAST'],
+            'oldest' => ['w.release_date AS s_released', 's_released ASC NULLS LAST'],
+            'title' => ['lower(w.title) AS s_title', 's_title ASC'],
+            'added' => ['w.added_at AS s_added', 's_added DESC'],
         ];
 
-        return [
-            'select' => $shared,
-            'order' => ($orders[$criteria->sort] ?? $orders['popularity']).', w.id DESC',
-        ];
+        // Relevance without a query to rank against is just popularity.
+        [$select, $order] = $keys[$criteria->sort] ?? $keys['popularity'];
+
+        return ['select' => $select, 'order' => $order.', w.id DESC'];
     }
 
     /**
@@ -441,7 +445,7 @@ final class WorkSearch
         [$where, $params, $types] = $this->conditions($criteria);
 
         $rows = $this->connection()->executeQuery(
-            'SELECT w.type, COUNT(DISTINCT w.id) AS n FROM works w '.$this->joins($criteria).'
+            'SELECT w.type, COUNT(*) AS n FROM works w '.$this->joins($criteria).'
              WHERE '.$where.' GROUP BY w.type',
             $params,
             $types,
@@ -491,7 +495,7 @@ final class WorkSearch
         [$where, $params, $types] = $this->conditions($criteria);
 
         $rows = $this->connection()->executeQuery(
-            'SELECT (w.year / 10) * 10 AS decade, COUNT(DISTINCT w.id) AS n
+            'SELECT (w.year / 10) * 10 AS decade, COUNT(*) AS n
              FROM works w '.$this->joins($criteria).'
              WHERE '.$where.' AND w.year IS NOT NULL
              GROUP BY decade

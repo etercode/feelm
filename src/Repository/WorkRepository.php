@@ -109,21 +109,45 @@ class WorkRepository extends ServiceEntityRepository
      * Announced but not out. Ordered by the date itself — ordering by year put
      * everything releasing in the same year in arbitrary order.
      *
+     * Selected as ids and then loaded, rather than as one query fetch-joining
+     * genres and ratings. Both of those are to-many, so the join multiplied
+     * each work by its rows and LIMIT counted the product: asking for twenty
+     * returned thirteen, and asking for forty returned twenty-three. The
+     * caller wants whole works, so the limit has to apply to works.
+     *
      * @return list<Work>
      */
     public function findUpcoming(int $limit = 20): array
     {
-        return $this->createQueryBuilder('w')
-            ->addSelect('g', 'r')
-            ->leftJoin('w.genres', 'g')
-            ->leftJoin('w.ratings', 'r')
+        $ids = $this->createQueryBuilder('w')
+            ->select('w.id')
             ->andWhere('w.deletedAt IS NULL')
             ->andWhere('w.releaseDate > CURRENT_DATE()')
             ->orderBy('w.releaseDate', 'ASC')
             ->addOrderBy('w.popularity', 'DESC')
+            ->addOrderBy('w.id', 'ASC')
             ->setMaxResults($limit)
             ->getQuery()
+            ->getSingleColumnResult();
+
+        if ([] === $ids) {
+            return [];
+        }
+
+        /** @var list<Work> $works */
+        $works = $this->createQueryBuilder('w')
+            ->addSelect('g', 'r')
+            ->leftJoin('w.genres', 'g')
+            ->leftJoin('w.ratings', 'r')
+            ->andWhere('w.id IN (:ids)')
+            ->setParameter('ids', $ids)
+            ->orderBy('w.releaseDate', 'ASC')
+            ->addOrderBy('w.popularity', 'DESC')
+            ->addOrderBy('w.id', 'ASC')
+            ->getQuery()
             ->getResult();
+
+        return $works;
     }
 
     /**

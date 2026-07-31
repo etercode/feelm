@@ -4,6 +4,7 @@ namespace App\Repository;
 
 use App\Entity\Person;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
+use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\Persistence\ManagerRegistry;
 
 /**
@@ -96,6 +97,156 @@ class PersonRepository extends ServiceEntityRepository
             ->setMaxResults($limit)
             ->getQuery()
             ->getResult();
+    }
+
+    /* -------------------------------------------------------------- admin */
+
+    /**
+     * One page of people for the admin table.
+     *
+     * SQL rather than DQL for the same reason the works table is: the search
+     * that matters is `name ILIKE '%…%'` over 1.1 million rows, and DQL has no
+     * ILIKE. The credit count comes back with the row, because a person is
+     * mostly interesting for how many things they are on — and asking each of
+     * them separately would be a query per row.
+     *
+     * @param array{q?: string|null, photo?: string|null, credits?: string|null, sort?: string|null} $filters
+     *
+     * @return array{items: list<array{person: Person, credits: int}>, total: int}
+     */
+    public function adminPage(array $filters, int $offset, int $limit): array
+    {
+        [$where, $params] = $this->adminConditions($filters);
+        $connection = $this->getEntityManager()->getConnection();
+
+        $total = (int) $connection->executeQuery(
+            'SELECT COUNT(*) FROM people p WHERE '.$where,
+            $params,
+        )->fetchOne();
+
+        if (0 === $total) {
+            return ['items' => [], 'total' => 0];
+        }
+
+        $rows = $connection->executeQuery(
+            'SELECT p.id, (SELECT COUNT(*) FROM credits c WHERE c.person_id = p.id) AS n
+             FROM people p WHERE '.$where.'
+             ORDER BY '.$this->adminOrder($filters['sort'] ?? null).'
+             LIMIT :limit OFFSET :offset',
+            [...$params, 'limit' => $limit, 'offset' => $offset],
+        )->fetchAllAssociative();
+
+        $counts = [];
+        foreach ($rows as $row) {
+            $counts[(int) $row['id']] = (int) $row['n'];
+        }
+
+        if ([] === $counts) {
+            return ['items' => [], 'total' => $total];
+        }
+
+        /** @var list<Person> $people */
+        $people = $this->createQueryBuilder('p')
+            ->andWhere('p.id IN (:ids)')
+            ->setParameter('ids', array_keys($counts))
+            ->getQuery()
+            ->getResult();
+
+        $byId = [];
+        foreach ($people as $person) {
+            $byId[(int) $person->getId()] = $person;
+        }
+
+        // Back into the order the page was selected in.
+        $items = [];
+        foreach ($counts as $id => $n) {
+            if (isset($byId[$id])) {
+                $items[] = ['person' => $byId[$id], 'credits' => $n];
+            }
+        }
+
+        return ['items' => $items, 'total' => $total];
+    }
+
+    /**
+     * @param array<string, mixed> $filters
+     *
+     * @return array{0: string, 1: array<string, mixed>}
+     */
+    private function adminConditions(array $filters): array
+    {
+        $clauses = ['TRUE'];
+        $params = [];
+
+        $term = trim((string) ($filters['q'] ?? ''));
+        if ('' !== $term) {
+            $clauses[] = '(p.name ILIKE :q OR p.slug ILIKE :q)';
+            $params['q'] = '%'.$term.'%';
+        }
+
+        $photo = $filters['photo'] ?? null;
+        if (null !== $photo) {
+            $clauses[] = 'yes' === $photo ? 'p.photo IS NOT NULL' : 'p.photo IS NULL';
+        }
+
+        // Orphans are the interesting case: the crawler creates a person the
+        // moment it sees a name, so a person with no credits left is a row
+        // nothing points at any more.
+        $credits = $filters['credits'] ?? null;
+        if (null !== $credits) {
+            $exists = 'EXISTS (SELECT 1 FROM credits c WHERE c.person_id = p.id)';
+            $clauses[] = 'none' === $credits ? 'NOT '.$exists : $exists;
+        }
+
+        return [implode(' AND ', $clauses), $params];
+    }
+
+    /**
+     * Anything unrecognised falls back to alphabetical, and that default is
+     * deliberate.
+     *
+     * Ordering by the credit count means computing it for all 1.1 million
+     * people before the LIMIT can throw 1,122,139 of them away — measured at
+     * 1.2 seconds, against 170ms for the name. Sorting by name lets Postgres
+     * walk an index, take twenty-five rows, and count only those. "Most
+     * credited" is still offered, because it is the right question sometimes;
+     * it is just not worth paying for on every visit to the page.
+     */
+    private function adminOrder(?string $sort): string
+    {
+        return match ($sort) {
+            'credits' => 'n DESC, p.id DESC',
+            'fewest' => 'n ASC, p.id DESC',
+            'newest' => 'p.id DESC',
+            default => 'p.name ASC, p.id DESC',
+        };
+    }
+
+    /**
+     * How many credits each of these people has, batched.
+     *
+     * @param list<int> $ids
+     *
+     * @return array<int, int>
+     */
+    public function creditCountsFor(array $ids): array
+    {
+        if ([] === $ids) {
+            return [];
+        }
+
+        $rows = $this->getEntityManager()->getConnection()->executeQuery(
+            'SELECT person_id AS id, COUNT(*) AS n FROM credits WHERE person_id IN (?) GROUP BY person_id',
+            [$ids],
+            [ArrayParameterType::INTEGER],
+        )->fetchAllAssociative();
+
+        $counts = array_fill_keys($ids, 0);
+        foreach ($rows as $row) {
+            $counts[(int) $row['id']] = (int) $row['n'];
+        }
+
+        return $counts;
     }
 
     /**

@@ -2,6 +2,7 @@
 
 namespace App\Entity;
 
+use App\Repository\CreditRepository;
 use Doctrine\ORM\Mapping as ORM;
 
 /**
@@ -9,7 +10,7 @@ use Doctrine\ORM\Mapping as ORM;
  * members carry a character, crew do not — and `position` keeps the source
  * ordering so a cast list still reads top-billed first.
  */
-#[ORM\Entity]
+#[ORM\Entity(repositoryClass: CreditRepository::class)]
 #[ORM\Table(name: 'credits')]
 #[ORM\Index(name: 'idx_credit_work_role', columns: ['work_id', 'role', 'position'])]
 #[ORM\Index(name: 'idx_credit_person', columns: ['person_id', 'role'])]

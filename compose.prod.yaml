@@ -39,7 +39,46 @@ services:
   database:
     # No host port. Nothing outside the Compose network needs to reach Postgres;
     # `docker compose exec database psql` still works for maintenance.
-    shm_size: 256mb
+    shm_size: 512mb
+    # Sized for the box: 11 GB of memory, six cores, SSD. Postgres ships with
+    # defaults meant to start anywhere, and on this server they were costing
+    # more than every query change in the application put together — /movies
+    # took ten and a half seconds to first byte against a catalogue the same
+    # machine holds entirely in memory.
+    command:
+      - postgres
+      # 128 MB of cache for a 2.7 GB database meant re-reading it constantly.
+      - -c
+      - shared_buffers=2GB
+      # What the planner assumes is cached between Postgres and the OS. Left at
+      # the 4 GB default it kept choosing sequential scans over index reads.
+      - -c
+      - effective_cache_size=7GB
+      # Per sort, not per connection, but the pool here is small. At 4 MB the
+      # facet counts spilled to disk on every search.
+      - -c
+      - work_mem=32MB
+      - -c
+      - maintenance_work_mem=512MB
+      # The default of 4 describes a spinning disk seeking. This is an SSD.
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
+      # Six cores, so let a big aggregate use more than two of them.
+      - -c
+      - max_worker_processes=6
+      - -c
+      - max_parallel_workers=6
+      - -c
+      - max_parallel_workers_per_gather=4
+      # Enough headroom that a crawl's writes are not checkpointing constantly.
+      - -c
+      - wal_buffers=16MB
+      - -c
+      - max_wal_size=4GB
+      - -c
+      - checkpoint_completion_target=0.9
 
 volumes:
   media:

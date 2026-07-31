@@ -35,6 +35,26 @@ services:
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - database_data:/var/lib/postgresql/data:rw
+    # Postgres ships with defaults chosen to start on anything, and against a
+    # catalogue this size they cost more than every query in the application
+    # put together. These are modest enough for a laptop; compose.prod.yaml
+    # raises them to suit the server.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=2GB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=256MB
+      # The default of 4 describes a spinning disk seeking. Nothing this runs
+      # on has one.
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-feelm}']
       interval: 5s

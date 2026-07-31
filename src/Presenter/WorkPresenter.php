@@ -58,6 +58,40 @@ final class WorkPresenter
     }
 
     /**
+     * A title on the home page's release queue.
+     *
+     * The queue draws a plate and a list: artwork, name, genres, when it lands,
+     * and who directed it. It has never shown the description, the cast, the
+     * runtime or where the row came from — all of which the full payload sends
+     * anyway, at about 1.3 KB a title.
+     *
+     * The rating fields stay. An upcoming title can be on somebody's shelf, and
+     * the poster card that draws it there reads them.
+     *
+     * @return array<string, mixed>
+     */
+    public function upcoming(Work $work): array
+    {
+        return [
+            'id' => $work->getId(),
+            'type' => $work->getType(),
+            'slug' => $work->getSlug(),
+            'title' => $work->getTitle(),
+            'year' => $work->getYear(),
+            'genres' => $work->getGenreNames(),
+            'poster' => $this->urls->media($work->getPoster()),
+            'backdrop' => $this->urls->media($work->getBackdrop()),
+            'externalScore' => $work->getExternalScore(),
+            'ratings' => $this->ratings($work),
+            'details' => array_filter([
+                'releaseDate' => $work->getReleaseDate()?->format('Y-m-d'),
+                'directors' => $this->names($work, Credit::ROLE_DIRECTOR) ?: null,
+            ], static fn ($value) => null !== $value),
+            'isUpcoming' => true,
+        ];
+    }
+
+    /**
      * Just enough to name a title and link to it.
      *
      * Admin tables list works next to something else — a review, a credit — and

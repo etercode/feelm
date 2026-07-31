@@ -134,11 +134,13 @@ class WorkRepository extends ServiceEntityRepository
             return [];
         }
 
+        /*
+         * No fetch-joins here. The caller preloads through WorkHydrator, which
+         * loads genres and ratings anyway — joining them again would send the
+         * same rows twice, multiplied by each other.
+         */
         /** @var list<Work> $works */
         $works = $this->createQueryBuilder('w')
-            ->addSelect('g', 'r')
-            ->leftJoin('w.genres', 'g')
-            ->leftJoin('w.ratings', 'r')
             ->andWhere('w.id IN (:ids)')
             ->setParameter('ids', $ids)
             ->orderBy('w.releaseDate', 'ASC')

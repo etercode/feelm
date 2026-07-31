@@ -9,6 +9,7 @@ use App\Repository\ReviewRepository;
 use App\Repository\WorkRepository;
 use App\Search\SearchCriteria;
 use App\Search\WorkSearch;
+use App\Service\Catalog\WorkHydrator;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -48,15 +49,25 @@ class WorkController extends AbstractController
     }
 
     #[Route('/api/upcoming', name: 'api_upcoming', methods: ['GET'])]
-    public function upcoming(Request $request): JsonResponse
+    public function upcoming(Request $request, WorkHydrator $hydrator): JsonResponse
     {
         $limit = min(40, max(1, $request->query->getInt('limit', 20)));
+        $works = $this->works->findUpcoming($limit);
+
+        /*
+         * Without this the presenter walks each work's collections and Doctrine
+         * fetches them one work at a time — and one person at a time behind the
+         * credits. Twenty titles was 170 queries: twenty for credits, twenty
+         * for external ids, and a hundred and thirty asking who each credited
+         * person is. Four now.
+         *
+         * /api/items does not need the call because WorkSearch preloads on its
+         * own way out; this endpoint does not go through it.
+         */
+        $hydrator->preload($works);
 
         return $this->json([
-            'items' => array_map(
-                fn (Work $work) => $this->presenter->one($work),
-                $this->works->findUpcoming($limit),
-            ),
+            'items' => array_map(fn (Work $work) => $this->presenter->upcoming($work), $works),
         ]);
     }
 

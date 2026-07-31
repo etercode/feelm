@@ -507,9 +507,16 @@ final class WorkSearch
     {
         [$where, $params, $types] = $this->conditions($criteria);
 
-        // This one does join genres — it is grouping by them.
+        /*
+         * This one does join genres — it is grouping by them — but it still
+         * counts plainly. work_genre is keyed on (work_id, genre_id), so a
+         * work appears at most once per genre and no group can see it twice:
+         * 575,109 rows, 575,109 distinct pairs. COUNT(DISTINCT) made Postgres
+         * sort every one of them by (slug, work_id) to prove what the primary
+         * key already guarantees.
+         */
         $rows = $this->connection()->executeQuery(
-            'SELECT fg.slug, fg.name, COUNT(DISTINCT w.id) AS n
+            'SELECT fg.slug, fg.name, COUNT(*) AS n
              FROM works w '.$this->joins($criteria).'
              JOIN work_genre fwg ON fwg.work_id = w.id
              JOIN genres fg ON fg.id = fwg.genre_id

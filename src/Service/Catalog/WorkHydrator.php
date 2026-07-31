@@ -13,10 +13,20 @@ use Doctrine\ORM\EntityManagerInterface;
  * is the expensive part. A page of 48 films cost about 2,200 queries and a
  * second and a half; batched, it is five.
  *
- * Anything that presents more than one work at a time wants this first.
+ * Anything that presents more than one work at a time wants this first — and
+ * anything presenting less than the whole payload should say which parts it
+ * needs, or it pays for a collection it never reads.
  */
 final class WorkHydrator
 {
+    public const GENRES = 'genres';
+    public const RATINGS = 'ratings';
+    public const EXTERNAL_IDS = 'externalIds';
+    public const CREDITS = 'credits';
+
+    /** @var list<string> */
+    public const ALL = [self::GENRES, self::RATINGS, self::EXTERNAL_IDS, self::CREDITS];
+
     public function __construct(
         private readonly EntityManagerInterface $entityManager,
     ) {
@@ -27,9 +37,10 @@ final class WorkHydrator
      * what carries the result across — the works handed in come back populated,
      * so nothing is returned.
      *
-     * @param list<Work> $works
+     * @param list<Work>   $works
+     * @param list<string> $only which collections to load; everything by default
      */
-    public function preload(array $works): void
+    public function preload(array $works, array $only = self::ALL): void
     {
         $ids = [];
         foreach ($works as $work) {
@@ -39,13 +50,14 @@ final class WorkHydrator
             }
         }
 
-        $this->preloadIds($ids);
+        $this->preloadIds($ids, $only);
     }
 
     /**
-     * @param list<int> $ids
+     * @param list<int>    $ids
+     * @param list<string> $only
      */
-    public function preloadIds(array $ids): void
+    public function preloadIds(array $ids, array $only = self::ALL): void
     {
         if ([] === $ids) {
             return;
@@ -55,11 +67,25 @@ final class WorkHydrator
          * One query per collection rather than one joining all of them: joined
          * together they multiply, so a film with 3 genres, 2 ratings and 14
          * credits would come back as 84 rows repeating the same film.
+         *
+         * Each one re-selects the work's own columns as well, which looks like
+         * waste and is not avoidable: DQL cannot hydrate a joined collection
+         * onto its owner without selecting the owner too, and partial selects
+         * are gone in ORM 3. Twenty extra work rows per collection is cheaper
+         * than the round trip it would save.
          */
-        $this->loadCollection($ids, 'genres');
-        $this->loadCollection($ids, 'ratings');
-        $this->loadCollection($ids, 'externalIds');
-        $this->loadCollection($ids, 'credits', 'person');
+        if (\in_array(self::GENRES, $only, true)) {
+            $this->loadCollection($ids, 'genres');
+        }
+        if (\in_array(self::RATINGS, $only, true)) {
+            $this->loadCollection($ids, 'ratings');
+        }
+        if (\in_array(self::EXTERNAL_IDS, $only, true)) {
+            $this->loadCollection($ids, 'externalIds');
+        }
+        if (\in_array(self::CREDITS, $only, true)) {
+            $this->loadCollection($ids, 'credits', 'person');
+        }
     }
 
     /**

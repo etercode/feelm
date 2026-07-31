@@ -64,7 +64,9 @@ class WorkController extends AbstractController
          * /api/items does not need the call because WorkSearch preloads on its
          * own way out; this endpoint does not go through it.
          */
-        $hydrator->preload($works);
+        // Genres, ratings and the director — not external ids, which the short
+        // payload does not carry and which would be a query for nothing.
+        $hydrator->preload($works, [WorkHydrator::GENRES, WorkHydrator::RATINGS, WorkHydrator::CREDITS]);
 
         return $this->json([
             'items' => array_map(fn (Work $work) => $this->presenter->upcoming($work), $works),

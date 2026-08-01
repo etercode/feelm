@@ -83,6 +83,7 @@ final class CatalogCrawlSeriesCommand extends Command
             ->addOption('concurrency', null, InputOption::VALUE_REQUIRED, 'Requests in flight at once', '8')
             ->addOption('seasons', null, InputOption::VALUE_REQUIRED, 'Seasons of episodes to pull in the same request, 0-16. Costs no extra API calls, only a bigger response', '8')
             ->addOption('quality', null, InputOption::VALUE_REQUIRED, 'Junk filter: off, basic or strict', SeriesQualityGate::BASIC)
+            ->addOption('since', null, InputOption::VALUE_REQUIRED, 'Skip series that had finished before this year. A show that began in 1989 and ran on into the 2000s is kept')
             ->addOption('min-popularity', null, InputOption::VALUE_REQUIRED, 'Never fetch export rows below this popularity. The only setting that saves API calls rather than rows', '0')
             ->addOption('media', null, InputOption::VALUE_REQUIRED, 'Artwork to keep a copy of: none, posters, all', 'none')
             ->addOption('refresh-export', null, InputOption::VALUE_NONE, 'Re-download the id export even if it is fresh')
@@ -127,6 +128,7 @@ final class CatalogCrawlSeriesCommand extends Command
             return Command::FAILURE;
         }
 
+        $since = null !== $input->getOption('since') ? (int) $input->getOption('since') : null;
         $seasons = max(0, min(self::MAX_APPENDED_SEASONS, (int) $input->getOption('seasons')));
         $limit = max(1, (int) $input->getOption('limit'));
         $concurrency = max(1, min(20, (int) $input->getOption('concurrency')));
@@ -146,11 +148,12 @@ final class CatalogCrawlSeriesCommand extends Command
         }
 
         $io->writeln(sprintf(
-            'Crawling %s series — quality=%s seasons=%d concurrency=%d%s',
+            'Crawling %s series — quality=%s seasons=%d concurrency=%d%s%s',
             number_format(\count($ids)),
             $quality,
             $seasons,
             $concurrency,
+            null !== $since ? ' since='.$since : '',
             $dryRun ? ' [DRY RUN — nothing will be stored]' : '',
         ));
 
@@ -196,7 +199,7 @@ final class CatalogCrawlSeriesCommand extends Command
                     continue;
                 }
 
-                $reason = $this->gate->reject($detail, $quality);
+                $reason = $this->gate->reject($detail, $quality) ?? $this->tooOld($detail, $since);
                 if (null !== $reason) {
                     $rejected[$reason] = ($rejected[$reason] ?? 0) + 1;
                     $attempted[$tmdbId] = $reason;
@@ -282,6 +285,36 @@ final class CatalogCrawlSeriesCommand extends Command
         $this->report($io, $started, $stored, $episodes, $partial, $seasons, $gone, $failed, $rejected, $minPopularity, $dryRun);
 
         return Command::SUCCESS;
+    }
+
+    /**
+     * Had this series finished before the year being crawled from?
+     *
+     * Measured on when it went off air, not when it started. Two thirds of the
+     * pre-1990 shows in a sample were still running after 1990 — The Simpsons
+     * began in 1989, Coronation Street in 1960 — so cutting on the first air
+     * date would throw away exactly the old titles worth having.
+     *
+     * A show still on air, or not yet started, has no last air date and stays.
+     *
+     * @param array<string, mixed> $detail
+     */
+    private function tooOld(array $detail, ?int $since): ?string
+    {
+        if (null === $since) {
+            return null;
+        }
+
+        $ended = trim((string) ($detail['last_air_date'] ?? ''));
+        if ('' === $ended) {
+            // Nothing has aired yet, or nothing has stopped airing. Fall back to
+            // when it began, which the quality gate has already required.
+            $ended = trim((string) ($detail['first_air_date'] ?? ''));
+        }
+
+        // The reason code stays constant whatever year is passed, so a queue
+        // crawled at one cutoff can still be requeued by name at another.
+        return '' !== $ended && (int) substr($ended, 0, 4) < $since ? 'too_old' : null;
     }
 
     /**

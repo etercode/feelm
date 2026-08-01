@@ -59,8 +59,13 @@ final class CatalogWorkPersister
          * somebody else's row and overwrite it. Only rows with no external id
          * at all (hand-written seed data) may be matched that way.
          */
+        // Films and television are numbered separately by TMDB — see
+        // ExternalId::SOURCE_TMDB_TV. Looking a series up in the movie id space
+        // finds an unrelated film and rewrites it.
+        $tmdbSource = ExternalId::tmdbFor($type);
+
         $existing = null !== $tmdbId
-            ? $this->works->findOneByExternalId(ExternalId::SOURCE_TMDB, (string) $tmdbId)
+            ? $this->works->findOneByExternalId($tmdbSource, (string) $tmdbId)
             : $this->works->findOneByTypeAndSlug($type, $slug);
 
         $work = $existing ?? (new Work())->setType($type);
@@ -105,8 +110,8 @@ final class CatalogWorkPersister
         $this->syncRating($work, $row);
         $this->syncGenres($work, $row['genres'] ?? []);
         $this->syncCredits($work, $row, $details);
-        $this->syncExternalId($work, ExternalId::SOURCE_TMDB, null !== $tmdbId ? (string) $tmdbId : null);
-        $this->syncExternalId($work, ExternalId::SOURCE_IMDB, $this->str($row['imdbId'] ?? $details['imdbId'] ?? null));
+        $this->syncExternalId($work, $tmdbSource, null !== $tmdbId ? (string) $tmdbId : null);
+        $this->syncExternalId($work, ExternalId::SOURCE_IMDB, $this->str($row['imdbId'] ?? $details['imdbId'] ?? null), verifyFree: true);
 
         // Only what no column and no relation owns.
         $work->setExtra($this->leftovers($details));
@@ -388,7 +393,12 @@ final class CatalogWorkPersister
             ->touch();
     }
 
-    private function syncExternalId(Work $work, string $source, ?string $externalId): void
+    /**
+     * @param bool $verifyFree check the id is not already another work's before
+     *                         writing it — for ids the source only reports,
+     *                         rather than the one this row was found by
+     */
+    private function syncExternalId(Work $work, string $source, ?string $externalId, bool $verifyFree = false): void
     {
         if (null === $externalId || '' === $externalId) {
             return;
@@ -396,15 +406,48 @@ final class CatalogWorkPersister
 
         foreach ($work->getExternalIds() as $existing) {
             if ($existing->getSource() === $source) {
+                if ($existing->getExternalId() === $externalId) {
+                    return;
+                }
+                if ($verifyFree && $this->claimed($work, $source, $externalId)) {
+                    return;
+                }
                 $existing->setExternalId($externalId);
 
                 return;
             }
         }
 
+        if ($verifyFree && $this->claimed($work, $source, $externalId)) {
+            return;
+        }
+
         $identifier = new ExternalId($source, $externalId);
         $this->entityManager->persist($identifier);
         $work->addExternalId($identifier);
+    }
+
+    /**
+     * Does another work already hold this id?
+     *
+     * TMDB gets IMDb ids wrong. It gives the anime Atashin'chi tt1127682, which
+     * IMDb says is the film 18 Grams of Love — and the unique constraint on
+     * (source, external_id) means writing the second one throws. That killed
+     * the whole title: the flush fails, Doctrine shuts the entity manager, and
+     * a series is lost over a cross-reference it did not need.
+     *
+     * The IMDb id is something a source reports, not what identifies the row —
+     * that is the TMDB id, which this work was looked up by and so cannot
+     * collide. So a contested IMDb id is simply not written, and the title is
+     * stored without it.
+     *
+     * One indexed lookup per title, and only when the id is new or changed.
+     */
+    private function claimed(Work $work, string $source, string $externalId): bool
+    {
+        $holder = $this->works->findOneByExternalId($source, $externalId);
+
+        return null !== $holder && $holder !== $work;
     }
 
     /**

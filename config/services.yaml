@@ -41,6 +41,12 @@ services:
         arguments:
             $projectDir: '%kernel.project_dir%'
 
+    App\Command\CatalogCrawlSeriesCommand:
+        arguments:
+            # Optional on purpose: the service only exists under APP_ENV=dev.
+            # See the constructor for why a long crawl has to empty it.
+            $debugQueries: '@?doctrine.debug_data_holder'
+
     App\Service\Tmdb\TmdbClient:
         arguments:
             $readAccessToken: '%env(default::TMDB_API_READ_ACCESS_TOKEN)%'

@@ -4,6 +4,7 @@ namespace App\Presenter;
 
 use App\Entity\Credit;
 use App\Entity\Episode;
+use App\Entity\ExternalId;
 use App\Entity\Season;
 use App\Entity\Work;
 use App\Entity\WorkRating;
@@ -204,7 +205,14 @@ final class WorkPresenter
             $source = $external->getSource();
             $value = $external->getExternalId();
             if (null !== $source && null !== $value) {
-                $ids[$source] = $value;
+                /*
+                 * Television is stored under its own source because TMDB's two
+                 * id spaces collide (see ExternalId::SOURCE_TMDB_TV), but that
+                 * is a storage concern. Outside it is one site, and the rating
+                 * rows this map is read against are keyed 'tmdb' whatever the
+                 * type — so a series' link would otherwise silently not resolve.
+                 */
+                $ids[ExternalId::SOURCE_TMDB_TV === $source ? ExternalId::SOURCE_TMDB : $source] = $value;
             }
         }
 

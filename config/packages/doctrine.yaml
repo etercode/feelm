@@ -13,10 +13,10 @@ doctrine:
         mapping_types:
             tsvector: string
 
-        # tmdb_movie_ids is a crawl queue owned entirely by migrations — no
-        # entity, and partial indexes DBAL cannot describe. Hiding it from
+        # The tmdb_*_ids tables are crawl queues owned entirely by migrations —
+        # no entity, and partial indexes DBAL cannot describe. Hiding them from
         # schema comparison keeps `doctrine:schema:validate` meaningful.
-        schema_filter: '~^(?!tmdb_movie_ids$).*~'
+        schema_filter: '~^(?!tmdb_(movie|series)_ids$).*~'
     orm:
         validate_xml_mapping: true
         naming_strategy: doctrine.orm.naming_strategy.underscore

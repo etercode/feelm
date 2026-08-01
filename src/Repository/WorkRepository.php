@@ -68,9 +68,14 @@ class WorkRepository extends ServiceEntityRepository
             ->getOneOrNullResult();
     }
 
-    public function findOneByTmdbId(int $tmdbId): ?Work
+    /**
+     * The work TMDB gave this id — in the id space of the type being asked
+     * for. TMDB numbers films and television apart, so the type is not
+     * decoration: without it, series 1396 finds a film.
+     */
+    public function findOneByTmdbId(int $tmdbId, string $type = 'movie'): ?Work
     {
-        return $this->findOneByExternalId(ExternalId::SOURCE_TMDB, (string) $tmdbId);
+        return $this->findOneByExternalId(ExternalId::tmdbFor($type), (string) $tmdbId);
     }
 
     /**
@@ -82,7 +87,8 @@ class WorkRepository extends ServiceEntityRepository
     {
         return $this->createQueryBuilder('w')
             ->addSelect('x')
-            ->join('w.externalIds', 'x', 'WITH', "x.source = 'tmdb'")
+            // Either TMDB id space: series carry theirs under tmdb_tv.
+            ->join('w.externalIds', 'x', 'WITH', "x.source IN ('tmdb', 'tmdb_tv')")
             ->andWhere('w.deletedAt IS NULL')
             ->andWhere("NOT EXISTS (
                 SELECT 1 FROM App\\Entity\\ExternalId imdb

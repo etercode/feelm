@@ -64,7 +64,7 @@ final class ImdbIdBackfillCommand extends Command
         $missing = 0;
 
         foreach ($pending as $work) {
-            $tmdbId = $work->getExternalId(ExternalId::SOURCE_TMDB);
+            $tmdbId = $work->getExternalId(ExternalId::tmdbFor($work->getType()));
             if (null === $tmdbId) {
                 continue;
             }

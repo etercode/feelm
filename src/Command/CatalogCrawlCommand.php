@@ -110,7 +110,7 @@ class CatalogCrawlCommand extends Command
                 $tmdbId = (int) $job['tmdbId'];
                 $seasonNo = (int) $job['season'];
 
-                $series = $this->works->findOneByTmdbId($tmdbId);
+                $series = $this->works->findOneByTmdbId($tmdbId, 'series');
                 if (null === $series) {
                     $io->writeln(sprintf('  ✗ series %d: missing in DB, drop S%d', $tmdbId, $seasonNo));
                     continue;
@@ -129,7 +129,7 @@ class CatalogCrawlCommand extends Command
                 }
 
                 // Re-load after possible clears.
-                $series = $this->works->findOneByTmdbId($tmdbId);
+                $series = $this->works->findOneByTmdbId($tmdbId, 'series');
                 if (null === $series) {
                     continue;
                 }
@@ -173,7 +173,7 @@ class CatalogCrawlCommand extends Command
                     $tmdbId = (int) $row['id'];
 
                     if ('movies' === $state['phase']) {
-                        if (null !== $this->works->findOneByTmdbId($tmdbId)) {
+                        if (null !== $this->works->findOneByTmdbId($tmdbId, 'movie')) {
                             ++$skipped;
                             $io->writeln(sprintf('  · skip movie %d (already in db)', $tmdbId));
                             continue;
@@ -197,7 +197,7 @@ class CatalogCrawlCommand extends Command
                         ++$titlesThisRun;
                         $io->writeln(sprintf('  ✓ movie %s (%s)', $mapped['title'], $mapped['year'] ?? '?'));
                     } else {
-                        if (null !== $this->works->findOneByTmdbId($tmdbId)) {
+                        if (null !== $this->works->findOneByTmdbId($tmdbId, 'series')) {
                             ++$skipped;
                             $io->writeln(sprintf('  · skip series %d (already in db)', $tmdbId));
                             continue;

@@ -17,8 +17,12 @@
 set -u
 
 APP_DIR=/opt/feelm
-LOG=/var/log/feelm-crawl-series.log
 COMPOSE="docker compose --env-file .env.prod -f compose.yaml -f compose.prod.yaml"
+
+# /var/log needs root, and a seventeen-hour job that silently loses its log
+# because it was started as the wrong user is not worth the tidier path.
+LOG=/var/log/feelm-crawl-series.log
+touch "$LOG" 2>/dev/null || LOG="$APP_DIR/crawl-series.log"
 
 # Titles per batch. Large enough that starting Symfony is noise, small enough
 # that an interrupted batch is not much lost.

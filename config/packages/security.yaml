@@ -55,6 +55,9 @@ security:
         - { path: ^/api/items, methods: [GET], roles: PUBLIC_ACCESS }
         - { path: ^/api/search, methods: [GET], roles: PUBLIC_ACCESS }
         - { path: ^/api/upcoming, methods: [GET], roles: PUBLIC_ACCESS }
+        # The front page: the same rails and release queue as the two above,
+        # gathered into one response. Public for the same reason they are.
+        - { path: ^/api/home, methods: [GET], roles: PUBLIC_ACCESS }
         - { path: ^/api/users, methods: [GET], roles: PUBLIC_ACCESS }
         # Crawl progress: counts and titles already public through /api/items.
         - { path: ^/api/crawl, methods: [GET], roles: PUBLIC_ACCESS }

@@ -322,39 +322,99 @@ final class WorkSearch
          * Anything matching fewer than POOL rows is unaffected: the pool is
          * then the whole match set, and the ordering is exactly what it was.
          */
-        if ($this->ranksByRelevance($criteria)) {
-            $sql = 'WITH pool AS (
-                        SELECT w.id, w.title, w.popularity, w.search_vector
-                        FROM works w '.$this->joins($criteria).'
-                        WHERE '.$where.'
-                        ORDER BY w.popularity DESC NULLS LAST, w.id DESC
-                        LIMIT :pool
-                    )
-                    SELECT w.id, '.$order['select'].'
-                    FROM pool w '.$this->joins($criteria).'
-                    ORDER BY '.$order['order'].'
-                    LIMIT :limit OFFSET :offset';
-
-            /*
-             * The pool has to cover the page being asked for, or paging past
-             * it returns nothing at all — which is not "the end of the
-             * results", it is a blank page 44 sitting after a full page 43.
-             */
-            $params['pool'] = max(
-                self::RELEVANCE_POOL,
-                $criteria->offset() + $criteria->limit + $extra,
-            );
-            $types['pool'] = ParameterType::INTEGER;
-        }
-
         $params['limit'] = $criteria->limit + $extra;
         $params['offset'] = $criteria->offset();
         $types['limit'] = ParameterType::INTEGER;
         $types['offset'] = ParameterType::INTEGER;
 
-        $rows = $this->connection()->executeQuery($sql, $params, $types)->fetchFirstColumn();
+        if (!$this->ranksByRelevance($criteria)) {
+            $rows = $this->connection()->executeQuery($sql, $params, $types)->fetchFirstColumn();
 
-        return array_map('intval', $rows);
+            return array_map('intval', $rows);
+        }
+
+        /*
+         * The pool has to cover the page being asked for, or paging past it
+         * returns nothing at all — which is not "the end of the results", it
+         * is a blank page 44 sitting after a full page 43.
+         */
+        $pool = max(self::RELEVANCE_POOL, $criteria->offset() + $criteria->limit + $extra);
+
+        /*
+         * Tried against the popular-only index first.
+         *
+         * Finding the most popular POOL matches means visiting every match:
+         * "ma" matches 305,242 rows, 1.4 seconds before ranking begins, and
+         * the overlay pays it from the second character typed. But a work with
+         * no popularity cannot reach the top of a pool sorted by popularity
+         * while a popular one is still waiting — so if the partial index
+         * (popularity >= 1) fills the pool by itself, its answer is the same
+         * answer, found in a quarter of the index.
+         *
+         * "If" is checked, not assumed, and the check is whether the pool
+         * filled — not whether the page did. Those differ: 500 popular matches
+         * fill a page of thirty while leaving 2,500 places in the pool that
+         * unpopular rows were entitled to, and one of them may be the exact
+         * title somebody typed. A short pool means the floor changed the
+         * answer, so the query is repeated without it.
+         *
+         * That second pass only happens for searches with fewer popular
+         * matches than the pool holds, which are cheap by definition.
+         */
+        [$ids, $filled] = $this->pooled($criteria, $where, $params, $types, $order, $pool, true);
+        if ($filled >= $pool) {
+            return $ids;
+        }
+
+        return $this->pooled($criteria, $where, $params, $types, $order, $pool, false)[0];
+    }
+
+    /**
+     * @param array<string, mixed>                               $params
+     * @param array<string, ParameterType|ArrayParameterType|int> $types
+     * @param array{select: string, order: string}               $order
+     *
+     * @return array{0: list<int>, 1: int} the page, and how many rows the pool held
+     */
+    private function pooled(
+        SearchCriteria $criteria,
+        string $where,
+        array $params,
+        array $types,
+        array $order,
+        int $pool,
+        bool $popularOnly,
+    ): array {
+        // Matches the partial index's predicate exactly, or Postgres will not
+        // use it.
+        $floor = $popularOnly ? ' AND w.popularity >= 1' : '';
+
+        /*
+         * count(*) OVER () is the pool's size, not the page's: window functions
+         * are evaluated before LIMIT, so it counts every row the pool held even
+         * though thirty come back.
+         */
+        $sql = 'WITH pool AS (
+                    SELECT w.id, w.title, w.popularity, w.search_vector
+                    FROM works w '.$this->joins($criteria).'
+                    WHERE '.$where.$floor.'
+                    ORDER BY w.popularity DESC NULLS LAST, w.id DESC
+                    LIMIT :pool
+                )
+                SELECT w.id, COUNT(*) OVER () AS pool_size, '.$order['select'].'
+                FROM pool w '.$this->joins($criteria).'
+                ORDER BY '.$order['order'].'
+                LIMIT :limit OFFSET :offset';
+
+        $params['pool'] = $pool;
+        $types['pool'] = ParameterType::INTEGER;
+
+        $rows = $this->connection()->executeQuery($sql, $params, $types)->fetchAllAssociative();
+
+        return [
+            array_map(static fn (array $row) => (int) $row['id'], $rows),
+            (int) ($rows[0]['pool_size'] ?? 0),
+        ];
     }
 
     /**

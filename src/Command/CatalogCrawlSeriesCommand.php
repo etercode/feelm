@@ -249,8 +249,16 @@ final class CatalogCrawlSeriesCommand extends Command
                     ++$failed;
                     $io->writeln(sprintf('  ✗ %d: %s', $tmdbId, $e->getMessage()));
                     $this->persister->reset();
-                    // Not marked done: a failure that was our fault deserves
-                    // another go on the next run.
+                    /*
+                     * Recorded as failed rather than left unmarked. Leaving it
+                     * queued was meant to give a transient fault another go,
+                     * but the runner loops until the queue empties, so a fault
+                     * that is not transient — an over-length title, a row that
+                     * trips a constraint — is retried forever and the crawl
+                     * never finishes. This way the run ends, and
+                     * --requeue=failed is one command when the cause is fixed.
+                     */
+                    $attempted[$tmdbId] = 'failed';
                     continue;
                 }
 

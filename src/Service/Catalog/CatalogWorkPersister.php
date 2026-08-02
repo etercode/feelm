@@ -147,11 +147,19 @@ final class CatalogWorkPersister
             }
         }
 
+        /*
+         * The lengths matter. Overviews are TEXT and take anything, but a
+         * title is varchar(255) and a poster path varchar(500), and TMDB has
+         * rows that exceed both — series 96444 carries an episode title long
+         * enough that the flush failed with a 22001, which took the whole
+         * series down with it and then stuck in the queue forever, because a
+         * failed row is retried and a title that long fails every time.
+         */
         $season = (new Season())
             ->setNumber($number)
-            ->setTitle($this->str($seasonRow['title'] ?? $seasonRow['name'] ?? null))
+            ->setTitle($this->str($seasonRow['title'] ?? $seasonRow['name'] ?? null, 255))
             ->setOverview($this->str($seasonRow['overview'] ?? null))
-            ->setPoster($this->str($seasonRow['poster'] ?? null));
+            ->setPoster($this->str($seasonRow['poster'] ?? null, 500));
         $work->addSeason($season);
 
         foreach ($seasonRow['episodes'] ?? [] as $episodeRow) {
@@ -160,7 +168,7 @@ final class CatalogWorkPersister
             }
             $episode = (new Episode())
                 ->setNumber((int) ($episodeRow['number'] ?? 0))
-                ->setTitle($this->str($episodeRow['title'] ?? null))
+                ->setTitle($this->str($episodeRow['title'] ?? null, 255))
                 ->setRuntime($this->int($episodeRow['runtime'] ?? null))
                 ->setOverview($this->str($episodeRow['overview'] ?? null));
 

@@ -602,15 +602,25 @@ final class WorkSearch
             ->getResult();
 
         /*
-         * Everything the list presenter reads — see WorkHydrator. Not credits:
-         * a listing does not name anybody, and loading them meant a join to
-         * people for roughly six of them per result, on every page.
+         * Only what the list presenter reads — see listItem(). That is the
+         * score and nothing else for a film or a series: genres are served by
+         * the facet and filter endpoints rather than repeated on every row,
+         * and the external ids only ever built a link a card does not draw.
+         *
+         * Games and books are the exception. Their fact line names a developer
+         * or an author, which are credits, so a page of them needs the join
+         * the other two types do not — and needs it in one query rather than
+         * per row.
          */
-        $this->hydrator->preloadIds($ids, [
-            WorkHydrator::GENRES,
-            WorkHydrator::RATINGS,
-            WorkHydrator::EXTERNAL_IDS,
-        ]);
+        $only = [WorkHydrator::RATINGS];
+        foreach ($works as $work) {
+            if (\in_array($work->getType(), ['game', 'book'], true)) {
+                $only[] = WorkHydrator::CREDITS;
+                break;
+            }
+        }
+
+        $this->hydrator->preloadIds($ids, $only);
 
         $byId = [];
         foreach ($works as $work) {

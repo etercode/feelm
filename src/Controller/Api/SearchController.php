@@ -72,7 +72,8 @@ class SearchController extends AbstractController
 
         return $this->json([
             'query' => $criteria->query,
-            'items' => array_map(fn ($work) => $this->presenter->listItem($work), $result['works']),
+            // The overlay draws a poster and a title. See suggestion().
+            'items' => array_map(fn ($work) => $this->presenter->suggestion($work), $result['works']),
             'total' => $result['total'],
             'suggestion' => $result['suggestion'],
             'people' => array_map(static fn ($person) => [

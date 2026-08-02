@@ -4,6 +4,7 @@ namespace App\Controller\Api;
 
 use App\Presenter\WorkPresenter;
 use App\Repository\WorkRepository;
+use App\Service\Catalog\WorkHydrator;
 use Doctrine\DBAL\Connection;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -116,7 +117,7 @@ final class CrawlController extends AbstractController
      * and the whole point is to be able to look through what arrived.
      */
     #[Route('/api/crawl/recent', name: 'api_crawl_recent', methods: ['GET'])]
-    public function recent(Request $request): JsonResponse
+    public function recent(Request $request, WorkHydrator $hydrator): JsonResponse
     {
         $type = $this->type($request);
         $limit = max(1, min(60, (int) $request->query->get('limit', 24)));
@@ -138,6 +139,15 @@ final class CrawlController extends AbstractController
             ->setMaxResults($limit)
             ->getQuery()
             ->getResult();
+
+        /*
+         * Without this the presenter walks each work's relations and Doctrine
+         * loads them one work at a time: 24 cards was 74 queries — a ratings
+         * lookup and a genre lookup and an external-id lookup apiece — for a
+         * page that draws a poster and a title. This endpoint does not go
+         * through WorkSearch, which preloads on its own way out.
+         */
+        $hydrator->preload($works, [WorkHydrator::RATINGS]);
 
         return $this->json([
             'type' => $type,

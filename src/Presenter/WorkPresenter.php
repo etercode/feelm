@@ -30,30 +30,109 @@ final class WorkPresenter
      */
     public function one(Work $work): array
     {
-        return $this->build($work, withCredits: true);
+        return $this->build($work);
     }
 
     /**
      * One row of a listing — browse, search, a rail.
      *
-     * Everything one() has except who worked on it. A list draws a poster, a
-     * title and a line of facts; the cast belongs to the page you open. Sending
-     * it anyway meant loading every credit and every person behind it for every
-     * result on every page, which was the single most expensive part of a
-     * browse: about six people per title, joined and serialised, to render
-     * nothing.
+     * Built from what a poster card actually draws, rather than from one() with
+     * pieces removed. Read PosterCard and types.js and the whole list is:
+     * artwork, title, the type, the fact line under it (year, runtime and
+     * certification for a film; seasons and episodes for a series), a score,
+     * and the two flags that decide whether it wears an UPCOMING or a NEW
+     * badge.
+     *
+     * What that leaves out is most of the bytes. The description and tagline
+     * are three quarters of a payload nobody reads until they open the title;
+     * the backdrop is a second URL for an image a card never shows; genres are
+     * drawn from the facet and filter endpoints, not from the rows; and the
+     * external ids exist only to build a link the card does not render.
      *
      * @return array<string, mixed>
      */
     public function listItem(Work $work): array
     {
-        return $this->build($work, withCredits: false);
+        return [
+            'id' => $work->getId(),
+            'type' => $work->getType(),
+            'slug' => $work->getSlug(),
+            'title' => $work->getTitle(),
+            'year' => $work->getYear(),
+            'poster' => $this->urls->media($work->getPoster()),
+            'externalScore' => $work->getExternalScore(),
+            'ratings' => $this->ratings($work),
+            // Only for the label when a title has no rating rows at all — the
+            // card prints the source's name beside the cached score.
+            'source' => $work->getSource(),
+            'details' => $this->listDetails($work),
+            // The NEW badge compares this against when you last caught up.
+            'addedAt' => $work->getAddedAt()?->format(\DateTimeInterface::ATOM),
+            'isUpcoming' => $work->isUpcoming(),
+        ];
+    }
+
+    /**
+     * The fact line under a card, and nothing else.
+     *
+     * Each type prints three things (see types.js `line`). Everything else a
+     * detail page asks for arrives when the page is opened.
+     *
+     * @return array<string, mixed>
+     */
+    private function listDetails(Work $work): array
+    {
+        $extra = $work->getExtra();
+
+        $details = [
+            'releaseDate' => $work->getReleaseDate()?->format('Y-m-d'),
+        ];
+
+        switch ($work->getType()) {
+            case 'series':
+                $details['seasonCount'] = $extra['seasonCount'] ?? null;
+                $details['episodeCount'] = $extra['episodeCount'] ?? null;
+                break;
+            case 'game':
+                $details['developers'] = $this->names($work, Credit::ROLE_DEVELOPER) ?: null;
+                $details['perspectives'] = $extra['perspectives'] ?? null;
+                break;
+            case 'book':
+                $details['authors'] = $this->names($work, Credit::ROLE_AUTHOR) ?: null;
+                $details['pages'] = $work->getPageCount();
+                break;
+            default:
+                $details['runtime'] = $work->getRuntimeMinutes();
+                $details['certification'] = $work->getCertification();
+        }
+
+        return array_filter($details, static fn ($value) => null !== $value);
+    }
+
+    /**
+     * A row in the search overlay: artwork, a name, and where it goes.
+     *
+     * The overlay draws exactly those, and was being sent a full list row for
+     * each — 25 KB of descriptions, scores and dates behind a dropdown that
+     * shows a poster and a title.
+     *
+     * @return array<string, mixed>
+     */
+    public function suggestion(Work $work): array
+    {
+        return [
+            'id' => $work->getId(),
+            'type' => $work->getType(),
+            'slug' => $work->getSlug(),
+            'title' => $work->getTitle(),
+            'poster' => $this->urls->media($work->getPoster()),
+        ];
     }
 
     /**
      * @return array<string, mixed>
      */
-    private function build(Work $work, bool $withCredits): array
+    private function build(Work $work): array
     {
         $payload = [
             'id' => $work->getId(),
@@ -71,7 +150,7 @@ final class WorkPresenter
             'ratings' => $this->ratings($work),
             'externalIds' => $this->externalIds($work),
             'source' => $work->getSource(),
-            'details' => $this->details($work, $withCredits),
+            'details' => $this->details($work),
             'addedAt' => $work->getAddedAt()?->format(\DateTimeInterface::ATOM),
             'isUpcoming' => $work->isUpcoming(),
         ];
@@ -98,7 +177,7 @@ final class WorkPresenter
      */
     public function upcoming(Work $work): array
     {
-        return [
+        $payload = [
             'id' => $work->getId(),
             'type' => $work->getType(),
             'slug' => $work->getSlug(),
@@ -115,6 +194,19 @@ final class WorkPresenter
             ], static fn ($value) => null !== $value),
             'isUpcoming' => true,
         ];
+
+        /*
+         * The plate on the home page plays this. It was never sent here, and
+         * the only reason some releases played anyway is that a title also
+         * sitting in one of the popularity rails picked one up from the list
+         * payload — so whether the hero had a trailer depended on how popular
+         * the film was. It is two short strings; send it.
+         */
+        if (null !== $work->getTrailer()) {
+            $payload['trailer'] = $work->getTrailer();
+        }
+
+        return $payload;
     }
 
     /**
@@ -258,7 +350,7 @@ final class WorkPresenter
      *
      * @return array<string, mixed>
      */
-    private function details(Work $work, bool $withCredits = true): array
+    private function details(Work $work): array
     {
         // Display-only leftovers first, so a real column always wins.
         $details = $work->getExtra();
@@ -267,17 +359,6 @@ final class WorkPresenter
         $details['certification'] = $work->getCertification();
         $details['releaseDate'] = $work->getReleaseDate()?->format('Y-m-d');
         $details['originalLanguage'] = $work->getOriginalLanguage();
-
-        if (!$withCredits) {
-            if (null !== $work->getPageCount()) {
-                $details['pages'] = $work->getPageCount();
-            }
-            if (null !== $work->getPublisher()) {
-                $details['publisher'] = $work->getPublisher();
-            }
-
-            return $details;
-        }
 
         foreach ([
             'directors' => Credit::ROLE_DIRECTOR,

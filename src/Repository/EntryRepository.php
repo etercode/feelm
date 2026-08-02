@@ -43,7 +43,7 @@ class EntryRepository extends ServiceEntityRepository
      *
      * @return list<Entry>
      */
-    public function findActivity(?array $userIds, int $limit = 40): array
+    public function findActivity(?array $userIds, int $limit = 40, int $offset = 0): array
     {
         $qb = $this->createQueryBuilder('e')
             ->innerJoin('e.user', 'u')->addSelect('u')
@@ -51,7 +51,11 @@ class EntryRepository extends ServiceEntityRepository
             ->andWhere('u.deletedAt IS NULL')
             ->andWhere('w.deletedAt IS NULL')
             ->orderBy('e.updatedAt', 'DESC')
-            ->setMaxResults($limit);
+            // Two entries saved in the same second would otherwise swap places
+            // between pages, which shows up as a row appearing twice.
+            ->addOrderBy('e.id', 'DESC')
+            ->setMaxResults($limit)
+            ->setFirstResult($offset);
 
         if (null !== $userIds) {
             if ([] === $userIds) {

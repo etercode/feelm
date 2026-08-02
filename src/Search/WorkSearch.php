@@ -27,6 +27,15 @@ final class WorkSearch
     private const SUGGEST_BELOW = 5;
 
     /**
+     * How many matches relevance ranking is allowed to consider.
+     *
+     * Generous enough that paging deep into a normal search never runs out —
+     * seventy a page is forty-two pages — and small enough that the per-row
+     * cost of ts_rank_cd stops mattering.
+     */
+    private const RELEVANCE_POOL = 3000;
+
+    /**
      * Per-query answers from needsFuzzy(), for the life of one request.
      *
      * @var array<string, bool>
@@ -246,6 +255,54 @@ final class WorkSearch
                 ORDER BY '.$order['order'].'
                 LIMIT :limit OFFSET :offset';
 
+        /*
+         * Relevance is ranked over a bounded pool rather than over everything
+         * that matched.
+         *
+         * ts_rank_cd has to read each row's search_vector off the heap, which
+         * the GIN index cannot supply, so its cost is per matching row and not
+         * per row returned. That is invisible for "matrix" — 149 matches — and
+         * ruinous for a common word: "the" matches 629,461 titles, and ranking
+         * all of them took 6.4 seconds to hand back thirty.
+         *
+         * So the pool is cut to the most popular POOL matches first, by a plain
+         * top-N sort on a column already in hand, and the expensive ordering
+         * runs only over those: 830ms for the same query.
+         *
+         * The results also got better, which is worth saying because it sounds
+         * like the opposite trade. Ranking everything, "love" returned six
+         * films called Love with popularity between 0.1 and 2.2 — exact title
+         * matches nobody was looking for. Bounding the pool first keeps the
+         * exact-title rule and applies it to the films people have heard of.
+         *
+         * Anything matching fewer than POOL rows is unaffected: the pool is
+         * then the whole match set, and the ordering is exactly what it was.
+         */
+        if ($this->ranksByRelevance($criteria)) {
+            $sql = 'WITH pool AS (
+                        SELECT w.id, w.title, w.popularity, w.search_vector
+                        FROM works w '.$this->joins($criteria).'
+                        WHERE '.$where.'
+                        ORDER BY w.popularity DESC NULLS LAST, w.id DESC
+                        LIMIT :pool
+                    )
+                    SELECT w.id, '.$order['select'].'
+                    FROM pool w '.$this->joins($criteria).'
+                    ORDER BY '.$order['order'].'
+                    LIMIT :limit OFFSET :offset';
+
+            /*
+             * The pool has to cover the page being asked for, or paging past
+             * it returns nothing at all — which is not "the end of the
+             * results", it is a blank page 44 sitting after a full page 43.
+             */
+            $params['pool'] = max(
+                self::RELEVANCE_POOL,
+                $criteria->offset() + $criteria->limit + $extra,
+            );
+            $types['pool'] = ParameterType::INTEGER;
+        }
+
         $params['limit'] = $criteria->limit + $extra;
         $params['offset'] = $criteria->offset();
         $types['limit'] = ParameterType::INTEGER;
@@ -268,9 +325,20 @@ final class WorkSearch
      *
      * @return array{select: string, order: string}
      */
+    /**
+     * Whether this search pays ts_rank_cd, and so needs the bounded pool.
+     *
+     * Any other sort orders by a plain column and never touches the vector, so
+     * bounding it there would cut results for nothing.
+     */
+    private function ranksByRelevance(SearchCriteria $criteria): bool
+    {
+        return 'relevance' === $criteria->sort && $criteria->hasQuery();
+    }
+
     private function orderExpressions(SearchCriteria $criteria): array
     {
-        if ('relevance' === $criteria->sort && $criteria->hasQuery()) {
+        if ($this->ranksByRelevance($criteria)) {
             return [
                 'select' => 'w.popularity AS s_pop,
                     ts_rank_cd(w.search_vector, query.q) AS s_rank,

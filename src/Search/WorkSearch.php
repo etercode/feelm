@@ -459,19 +459,48 @@ final class WorkSearch
              * for every row, so it cannot discriminate, and text rank still
              * orders them.
              */
+            /*
+             * One score, rather than exactness first and popularity as an
+             * afterthought.
+             *
+             * Strict ordering could not express what people mean. "pulp" has
+             * to reach Pulp Fiction past five films called exactly Pulp, so
+             * exactness cannot be absolute — but "up" has to reach Up past
+             * Uppdrag granskning, and "toy story" has to reach the 1995 one
+             * past Toy Story 5, so it cannot be worthless either. Nothing
+             * ordered strictly satisfies both; a title match has to be worth
+             * some amount of popularity rather than all of it or none.
+             *
+             * Popularity enters as a logarithm because it spans four orders of
+             * magnitude here — 0.7 to 1,154 — and the difference between 40 and
+             * 300 should not swamp a title match the way the raw numbers would.
+             *
+             * The weights are fitted to the cases above, not guessed. Writing
+             * out what each demands leaves the gap between exact and
+             * starts-with between 2.02 and 2.46 — Her against Her Private Hell
+             * at one end, Pulp against Pulp Fiction at the other — so it is
+             * 2.2, which is worth about nine times the popularity.
+             *
+             * The 20 is not fitted; it is larger than ln of the most popular
+             * thing in the catalog can ever be, so a title match always
+             * outranks a row that merely mentions the words. Without it,
+             * searching "alien" led with Disclosure Day — popularity 439, the
+             * word somewhere in its text — above a film actually called Alien.
+             * Ranking a passing mention over a title is never what a title
+             * search meant.
+             */
             return [
                 'select' => "w.popularity AS s_pop,
                     ts_rank_cd(w.search_vector, query.q) AS s_rank,
                     (regexp_replace(lower(w.title), '^(the|a|an)\\s+', '') = :qbare) AS s_exact,
                     (regexp_replace(lower(w.title), '^(the|a|an)\\s+', '') LIKE :qbareprefix) AS s_prefix,
+                    (CASE WHEN regexp_replace(lower(w.title), '^(the|a|an)\\s+', '') LIKE :qbareprefix THEN 20 ELSE 0 END
+                     + CASE WHEN regexp_replace(lower(w.title), '^(the|a|an)\\s+', '') = :qbare THEN 2.2 ELSE 0 END
+                     + ln(1 + GREATEST(COALESCE(w.popularity, 0), 0))) AS s_score,
                     similarity(w.title, :qtrgm) AS s_sim",
-                // The CASE spells the comparison out again rather than reusing
-                // s_exact: Postgres accepts a select alias as a bare ORDER BY
-                // term, but not inside an expression.
-                'order' => "s_exact DESC,
-                    CASE WHEN regexp_replace(lower(w.title), '^(the|a|an)\\s+', '') = :qbare
-                         THEN w.popularity END DESC NULLS LAST,
-                    s_prefix DESC, s_rank DESC, s_sim DESC, s_pop DESC NULLS LAST, w.id DESC",
+                // Text rank and spelling distance settle rows the score ties,
+                // which is mostly rows with no title match at all.
+                'order' => 's_score DESC, s_rank DESC, s_sim DESC, s_pop DESC NULLS LAST, w.id DESC',
             ];
         }
 

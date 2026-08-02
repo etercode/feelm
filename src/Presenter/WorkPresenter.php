@@ -110,11 +110,17 @@ final class WorkPresenter
     }
 
     /**
-     * A row in the search overlay: artwork, a name, and where it goes.
+     * A row in the search overlay: artwork, a name, its year, and where it goes.
      *
-     * The overlay draws exactly those, and was being sent a full list row for
-     * each — 25 KB of descriptions, scores and dates behind a dropdown that
-     * shows a poster and a title.
+     * Trimmed from the full list row, which was 25 KB of descriptions, scores
+     * and dates behind a dropdown. Not trimmed past the subtitle, though: the
+     * row draws "2010 · 2h 28m" under the title, and that line is what tells
+     * two films of the same name apart — which is the entire reason somebody is
+     * looking at a list of matches rather than the first one.
+     *
+     * `details` therefore has to be present and shaped per type, because the
+     * client reads it positionally — item.details.runtime, .seasonCount — and
+     * an absent one is a TypeError in the middle of a render, not a blank line.
      *
      * @return array<string, mixed>
      */
@@ -125,7 +131,9 @@ final class WorkPresenter
             'type' => $work->getType(),
             'slug' => $work->getSlug(),
             'title' => $work->getTitle(),
+            'year' => $work->getYear(),
             'poster' => $this->urls->media($work->getPoster()),
+            'details' => $this->listDetails($work),
         ];
     }
 

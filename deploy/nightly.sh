@@ -58,6 +58,13 @@ run "series" php bin/console app:catalog:crawl-series --refresh-export --limit=2
 # so a night that fails does not leave a hole.
 run "episodes" php bin/console app:catalog:refresh-series --days=2 --budget=600
 
+# Must come after the two crawls: they are what re-download the id export this
+# reads. Popularity is otherwise written once, on the day a title is crawled,
+# and never again — which quietly leaves the whole site sorted by a measurement
+# that stopped measuring. No API calls; it is a join against the export we
+# already have.
+run "popularity" php bin/console app:catalog:refresh-popularity
+
 # 1G because the importer holds every known IMDb id in memory to join against;
 # at 472k ids the default 256M dies about a quarter of the way in.
 run "imdb ratings" php -d memory_limit=1G bin/console app:catalog:imdb-ratings

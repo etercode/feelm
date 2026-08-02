@@ -19,3 +19,8 @@ services:
     ports:
       # 5432–5434 are taken on this host; inside Docker the port stays 5432.
       - '5435:5432'
+    # Matches production. Docker's 64MB default is not enough for a parallel
+    # hash join across the catalog — the popularity refresh joins 727k works
+    # against the id export and dies with "could not resize shared memory
+    # segment", which is a container limit rather than anything about the query.
+    shm_size: 512mb

@@ -144,8 +144,17 @@ class WorkRepository extends ServiceEntityRepository
     }
 
     /**
-     * Announced but not out. Ordered by the date itself — ordering by year put
-     * everything releasing in the same year in arbitrary order.
+     * Announced but not out — the titles worth waiting for, in date order.
+     *
+     * Picked by popularity and then sorted by date, which is not the same as
+     * sorting by date and taking the first twenty. That is what it used to do,
+     * and TMDB publishes enough that a single day fills every slot: the whole
+     * hero was one arbitrary tomorrow, none of it above popularity 5.2, while
+     * the films people are actually waiting for sat two months out and never
+     * appeared. Twenty of the biggest, shown in the order they arrive.
+     *
+     * A poster is required — the hero is a full-bleed plate and there is
+     * nothing to draw without one.
      *
      * Selected as ids and then loaded, rather than as one query fetch-joining
      * genres and ratings. Both of those are to-many, so the join multiplied
@@ -155,14 +164,21 @@ class WorkRepository extends ServiceEntityRepository
      *
      * @return list<Work>
      */
-    public function findUpcoming(int $limit = 20): array
+    public function findUpcoming(int $limit = 20, int $withinDays = 365): array
     {
         $ids = $this->createQueryBuilder('w')
             ->select('w.id')
             ->andWhere('w.deletedAt IS NULL')
+            ->andWhere('w.poster IS NOT NULL')
             ->andWhere('w.releaseDate > CURRENT_DATE()')
-            ->orderBy('w.releaseDate', 'ASC')
-            ->addOrderBy('w.popularity', 'DESC')
+            /*
+             * A horizon, because TMDB carries placeholders years out — sequels
+             * with a year and nothing else — and those are popular enough on
+             * announcement alone to crowd out everything releasing this month.
+             */
+            ->andWhere('w.releaseDate <= :until')
+            ->setParameter('until', (new \DateTimeImmutable())->modify(sprintf('+%d days', max(1, $withinDays))))
+            ->orderBy('w.popularity', 'DESC')
             ->addOrderBy('w.id', 'ASC')
             ->setMaxResults($limit)
             ->getQuery()

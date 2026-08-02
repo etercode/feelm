@@ -25,7 +25,8 @@ class Season
     #[ORM\Column]
     private ?int $number = null;
 
-    #[ORM\Column(length: 255, nullable: true)]
+    // TEXT for the same reason as Episode::$title.
+    #[ORM\Column(type: Types::TEXT, nullable: true)]
     private ?string $title = null;
 
     #[ORM\Column(type: Types::TEXT, nullable: true)]

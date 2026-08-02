@@ -23,7 +23,14 @@ class Episode
     #[ORM\Column]
     private ?int $number = null;
 
-    #[ORM\Column(length: 255, nullable: true)]
+    /*
+     * TEXT, not varchar(255). Episode titles are not bounded in practice —
+     * light-novel and anime episodes run to sentences, and TMDB serves them in
+     * full. In PostgreSQL a length limit buys nothing anyway: varchar(n) and
+     * text share a representation and a cost, so the 255 was a MySQL habit
+     * that truncated real titles for no gain.
+     */
+    #[ORM\Column(type: Types::TEXT, nullable: true)]
     private ?string $title = null;
 
     #[ORM\Column(nullable: true)]

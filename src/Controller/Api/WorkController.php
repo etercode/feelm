@@ -79,14 +79,79 @@ class WorkController extends AbstractController
     }
 
     #[Route('/api/items/{type}/{slug}', name: 'api_items_show', methods: ['GET'], requirements: ['type' => 'movie|series|game|book'])]
-    public function show(string $type, string $slug, ReviewRepository $reviews): JsonResponse
+    public function show(string $type, string $slug, ReviewRepository $reviews, WorkHydrator $hydrator): JsonResponse
     {
         $work = $this->requireWork($type, $slug);
+
+        /*
+         * One title, but its credits are a collection of collections: the
+         * presenter asks each credit who the person is, and Doctrine answers
+         * one person at a time. A film with twelve cast members and a director
+         * was sixteen queries, thirteen of them the same lookup against
+         * `people`. This makes it four.
+         */
+        $hydrator->preload([$work]);
 
         return $this->json([
             'item' => $this->presenter->one($work),
             'rating' => $reviews->ratingOf($work),
+            /*
+             * The rest of the series. This used to be assembled in the browser
+             * from whatever the front page had cached, so it appeared for a
+             * sequel popular enough to be in a rail and was quietly missing for
+             * every other one. One indexed query answers it for all 21,621
+             * titles that belong to a collection.
+             */
+            'collection' => $this->works->collectionSiblings($work),
         ]);
+    }
+
+    /**
+     * More like this one.
+     *
+     * The browser used to do this: ask for 48 titles of the same type, 22 KB
+     * of them, and pick whichever shared a genre. That looked at 48 rows out of
+     * seven hundred thousand, so "related" meant "also happens to be popular",
+     * and it stopped working entirely the moment list rows stopped carrying
+     * genres. The same search that powers /search answers it properly, against
+     * the whole catalog, and sends nine rows instead of forty-eight.
+     *
+     * Its own endpoint rather than part of the detail payload: the page can
+     * draw everything above it without waiting on this.
+     */
+    #[Route('/api/items/{type}/{slug}/related', name: 'api_items_related', methods: ['GET'], requirements: ['type' => 'movie|series|game|book'])]
+    public function related(string $type, string $slug, Request $request): JsonResponse
+    {
+        $work = $this->requireWork($type, $slug);
+        $genres = $work->getGenreSlugs();
+
+        if ([] === $genres) {
+            return $this->json(['items' => []]);
+        }
+
+        $limit = min(24, max(1, $request->query->getInt('limit', 8)));
+
+        $criteria = new SearchCriteria(
+            types: [$type],
+            genres: $genres,
+            sort: 'popularity',
+            // One extra, because the title itself is the most likely match.
+            limit: $limit + 1,
+        );
+        $result = $this->search->search($criteria, withSuggestion: false, withTotal: false);
+
+        $items = [];
+        foreach ($result['works'] as $other) {
+            if ($other->getId() === $work->getId()) {
+                continue;
+            }
+            $items[] = $this->presenter->listItem($other);
+            if (\count($items) >= $limit) {
+                break;
+            }
+        }
+
+        return $this->json(['items' => $items]);
     }
 
     #[Route('/api/items/{type}/{slug}/reviews', name: 'api_items_reviews', methods: ['GET'], requirements: ['type' => 'movie|series|game|book'])]

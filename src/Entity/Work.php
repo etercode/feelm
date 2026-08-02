@@ -524,6 +524,19 @@ class Work
         ));
     }
 
+    /**
+     * The slugs, which is what the search filters on — names are for display.
+     *
+     * @return list<string>
+     */
+    public function getGenreSlugs(): array
+    {
+        return array_values(array_map(
+            static fn (Genre $genre) => (string) $genre->getSlug(),
+            $this->genres->toArray(),
+        ));
+    }
+
     /** @return Collection<int, Credit> */
     public function getCredits(): Collection
     {

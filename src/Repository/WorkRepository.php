@@ -112,6 +112,38 @@ class WorkRepository extends ServiceEntityRepository
     }
 
     /**
+     * The other titles in this one's collection, in story order.
+     *
+     * Returned as plain rows rather than entities: the strip draws a poster, a
+     * part number and a link, and hydrating twenty Works to read four columns
+     * would pull their genres and ratings along behind them.
+     *
+     * @return list<array{id: int, type: string, slug: string, title: string, poster: ?string, part: ?int}>
+     */
+    public function collectionSiblings(Work $work, int $limit = 30): array
+    {
+        $name = $work->getExtra()['collection']['name'] ?? null;
+        if (!\is_string($name) || '' === $name) {
+            return [];
+        }
+
+        /** @var list<array{id: int, type: string, slug: string, title: string, poster: ?string, part: ?int}> $rows */
+        $rows = $this->getEntityManager()->getConnection()->fetchAllAssociative(
+            "SELECT id, type, slug, title, poster,
+                    (extra->'collection'->>'part')::int AS part
+             FROM works
+             WHERE deleted_at IS NULL
+               AND extra->'collection'->>'name' = :name
+             ORDER BY part NULLS LAST, year NULLS LAST, id
+             LIMIT :limit",
+            ['name' => $name, 'limit' => $limit],
+            ['limit' => \Doctrine\DBAL\ParameterType::INTEGER],
+        );
+
+        return $rows;
+    }
+
+    /**
      * Announced but not out. Ordered by the date itself — ordering by year put
      * everything releasing in the same year in arbitrary order.
      *

@@ -443,15 +443,35 @@ final class WorkSearch
     private function orderExpressions(SearchCriteria $criteria): array
     {
         if ($this->ranksByRelevance($criteria)) {
+            /*
+             * Titles are compared with a leading article removed, on both
+             * sides. Nobody types "the" — they search "odyssey", "matrix",
+             * "godfather" — and without this those three queries returned ten
+             * obscure films titled exactly Odyssey, Matrix and Godfather while
+             * the ones anybody meant did not appear at all. An exact title was
+             * the first sort key and absolute, so a film with 0.5 popularity
+             * beat The Odyssey with 1,154 for want of a word.
+             *
+             * Popularity then decides inside the exact group, which is the
+             * other half of the fix: there are a dozen films called Odyssey and
+             * the question is which one somebody typing it means. The CASE
+             * confines that to exact matches — for everything else it is NULL
+             * for every row, so it cannot discriminate, and text rank still
+             * orders them.
+             */
             return [
-                'select' => 'w.popularity AS s_pop,
+                'select' => "w.popularity AS s_pop,
                     ts_rank_cd(w.search_vector, query.q) AS s_rank,
-                    (lower(w.title) = lower(:qtext)) AS s_exact,
-                    (lower(w.title) LIKE lower(:qprefix)) AS s_prefix,
-                    similarity(w.title, :qtrgm) AS s_sim',
-                // Exact title, then "starts with", then text rank, then how
-                // close the spelling is, then popularity as the tiebreak.
-                'order' => 's_exact DESC, s_prefix DESC, s_rank DESC, s_sim DESC, s_pop DESC NULLS LAST, w.id DESC',
+                    (regexp_replace(lower(w.title), '^(the|a|an)\\s+', '') = :qbare) AS s_exact,
+                    (regexp_replace(lower(w.title), '^(the|a|an)\\s+', '') LIKE :qbareprefix) AS s_prefix,
+                    similarity(w.title, :qtrgm) AS s_sim",
+                // The CASE spells the comparison out again rather than reusing
+                // s_exact: Postgres accepts a select alias as a bare ORDER BY
+                // term, but not inside an expression.
+                'order' => "s_exact DESC,
+                    CASE WHEN regexp_replace(lower(w.title), '^(the|a|an)\\s+', '') = :qbare
+                         THEN w.popularity END DESC NULLS LAST,
+                    s_prefix DESC, s_rank DESC, s_sim DESC, s_pop DESC NULLS LAST, w.id DESC",
             ];
         }
 
@@ -521,6 +541,10 @@ final class WorkSearch
             $params['qtext'] = $query;
             $params['qprefix'] = $query.'%';
             $params['qtrgm'] = mb_strtolower($query);
+            // The same shape the title is reduced to before comparing — see
+            // orderExpressions(). Done once here rather than per row.
+            $params['qbare'] = $bare = $this->withoutArticle(mb_strtolower(trim($query)));
+            $params['qbareprefix'] = $bare.'%';
 
             /*
              * Full text first; trigram similarity on the title is the safety
@@ -662,6 +686,17 @@ final class WorkSearch
      *
      * @param list<string> $tokens
      */
+    /**
+     * A title or a query with its leading article dropped.
+     *
+     * Only leading, and only when something follows it: "The Thing" reduces to
+     * "thing", but a film actually called "The" keeps its name.
+     */
+    private function withoutArticle(string $text): string
+    {
+        return preg_replace('/^(the|a|an)\s+/u', '', $text) ?? $text;
+    }
+
     private function tsquery(array $tokens): string
     {
         $last = array_pop($tokens);

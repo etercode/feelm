@@ -15,6 +15,9 @@ final class SearchCriteria
     public const RELEASE_STATES = ['any', 'released', 'upcoming'];
     public const GENRE_MODES = ['any', 'all'];
 
+    /** Most rows one request may ask for. */
+    public const MAX_LIMIT = 100;
+
     /**
      * @param list<string> $types
      * @param list<string> $genres         genre slugs
@@ -69,7 +72,16 @@ final class SearchCriteria
             releaseState: self::oneOf($request->query->getString('release'), self::RELEASE_STATES, 'any'),
             sort: self::oneOf($sort, self::SORTS, 'relevance'),
             page: max(1, $request->query->getInt('page', 1)),
-            limit: min(60, max(1, $request->query->getInt('limit', 24))),
+            /*
+             * 100, up from 60. The browse pages ask for 70 — ten rows of seven
+             * at the widest breakpoint — and a cap below what a caller asks for
+             * does not fail, it quietly returns fewer, which is the sort of
+             * thing you chase in the browser for an hour.
+             *
+             * It stays capped because the limit is also the page size for
+             * anonymous callers, and the listing hydrates every row it returns.
+             */
+            limit: min(self::MAX_LIMIT, max(1, $request->query->getInt('limit', 24))),
         );
     }
 

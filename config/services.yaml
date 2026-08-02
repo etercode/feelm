@@ -47,6 +47,10 @@ services:
             # See the constructor for why a long crawl has to empty it.
             $debugQueries: '@?doctrine.debug_data_holder'
 
+    App\Command\CatalogRefreshSeriesCommand:
+        arguments:
+            $debugQueries: '@?doctrine.debug_data_holder'
+
     App\Service\Tmdb\TmdbClient:
         arguments:
             $readAccessToken: '%env(default::TMDB_API_READ_ACCESS_TOKEN)%'

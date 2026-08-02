@@ -191,6 +191,50 @@ class WorkRepository extends ServiceEntityRepository
     }
 
     /**
+     * Out recently — the other half of the release queue.
+     *
+     * Ordered by popularity rather than by date, which is the whole difference
+     * between this and "recently added". Sorting the catalog by added_at after
+     * a bulk crawl returns whatever the crawler reached last, and that is a
+     * wall of zero-popularity titles nobody has heard of; a visitor reads
+     * "latest" as "what is out now", not as a log of our crawl.
+     *
+     * A poster is required for the same reason: this is a row of posters.
+     *
+     * @return list<Work>
+     */
+    public function findRecentlyReleased(int $limit = 20, int $days = 90): array
+    {
+        $ids = $this->createQueryBuilder('w')
+            ->select('w.id')
+            ->andWhere('w.deletedAt IS NULL')
+            ->andWhere('w.poster IS NOT NULL')
+            ->andWhere('w.releaseDate <= CURRENT_DATE()')
+            ->andWhere('w.releaseDate >= :from')
+            ->setParameter('from', (new \DateTimeImmutable())->modify(sprintf('-%d days', max(1, $days))))
+            ->orderBy('w.popularity', 'DESC')
+            ->addOrderBy('w.id', 'ASC')
+            ->setMaxResults($limit)
+            ->getQuery()
+            ->getSingleColumnResult();
+
+        if ([] === $ids) {
+            return [];
+        }
+
+        /** @var list<Work> $works */
+        $works = $this->createQueryBuilder('w')
+            ->andWhere('w.id IN (:ids)')
+            ->setParameter('ids', $ids)
+            ->orderBy('w.popularity', 'DESC')
+            ->addOrderBy('w.id', 'ASC')
+            ->getQuery()
+            ->getResult();
+
+        return $works;
+    }
+
+    /**
      * Values the certification filter can offer, most used first.
      *
      * @return list<string>

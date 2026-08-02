@@ -54,6 +54,15 @@ final class HomeController extends AbstractController
             }
         }
 
+        /*
+         * Out in the last three months, most popular first. Sits opposite the
+         * release queue: that one is what is coming, this one is what landed
+         * while you were not looking, and together they are the reason to open
+         * the page more than once.
+         */
+        $latest = $this->works->findRecentlyReleased($rail);
+        $this->hydrator->preload($latest, [WorkHydrator::RATINGS]);
+
         $upcoming = $this->works->findUpcoming($upcomingLimit);
         // Genres, ratings and the director — what the release plate draws.
         $this->hydrator->preload($upcoming, [
@@ -64,6 +73,7 @@ final class HomeController extends AbstractController
 
         return $this->json([
             'rails' => $rails,
+            'latest' => array_map(fn (Work $work) => $this->presenter->listItem($work), $latest),
             'upcoming' => array_map(fn (Work $work) => $this->presenter->upcoming($work), $upcoming),
         ]);
     }

@@ -171,14 +171,20 @@ final class ImdbRatingsImporter
          * One statement per batch, and re-running it just refreshes the numbers.
          * The casts are load-bearing: bound parameters arrive as text, so
          * without them Postgres types the VALUES columns as text and refuses.
+         *
+         * The WHERE is what makes editing a rating in the admin worth anything.
+         * Without it this would reinstate IMDb's number over a correction on the
+         * next run, and do it silently, which is the sort of thing somebody
+         * notices months later and cannot explain.
          */
-        $sql = 'INSERT INTO work_ratings (work_id, source, rating, scale, votes, updated_at)
-                SELECT v.work_id::int, :source, v.rating::numeric, 10, v.votes::int, NOW()
+        $sql = 'INSERT INTO work_ratings (work_id, source, rating, scale, votes, updated_at, locked)
+                SELECT v.work_id::int, :source, v.rating::numeric, 10, v.votes::int, NOW(), FALSE
                 FROM (VALUES '.implode(', ', $values).') AS v(work_id, rating, votes)
                 ON CONFLICT (work_id, source) DO UPDATE
                 SET rating = EXCLUDED.rating,
                     votes = EXCLUDED.votes,
-                    updated_at = EXCLUDED.updated_at';
+                    updated_at = EXCLUDED.updated_at
+                WHERE work_ratings.locked = FALSE';
 
         $params['source'] = WorkRating::SOURCE_IMDB;
 

@@ -279,6 +279,13 @@ final class WorkPresenter
             'publisher' => $work->getPublisher(),
             'genres' => $work->getGenreNames(),
             'ratings' => $this->ratings($work),
+            /*
+             * Admin only. Whether the IMDb row is held against the dataset
+             * import is something the edit form has to show — otherwise a
+             * locked title looks identical to one nobody has touched — but it
+             * is nothing to the public payload, which is a poster and a number.
+             */
+            'imdbLocked' => $work->getRating(WorkRating::SOURCE_IMDB)?->isLocked() ?? false,
             'externalIds' => $this->externalIds($work),
             'source' => $work->getSource(),
             'isUpcoming' => $work->isUpcoming(),

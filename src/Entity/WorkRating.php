@@ -58,6 +58,15 @@ class WorkRating
     #[ORM\Column(type: Types::DATETIME_IMMUTABLE)]
     private ?\DateTimeImmutable $updatedAt = null;
 
+    /**
+     * Corrected by hand, so the importer leaves it alone.
+     *
+     * On the rating rather than the work: locking what IMDb says about a title
+     * should not also freeze what TMDB says about it.
+     */
+    #[ORM\Column(options: ['default' => false])]
+    private bool $locked = false;
+
     public function __construct(?string $source = null)
     {
         $this->source = $source;
@@ -140,6 +149,18 @@ class WorkRating
     public function touch(): static
     {
         $this->updatedAt = new \DateTimeImmutable();
+
+        return $this;
+    }
+
+    public function isLocked(): bool
+    {
+        return $this->locked;
+    }
+
+    public function setLocked(bool $locked): static
+    {
+        $this->locked = $locked;
 
         return $this;
     }

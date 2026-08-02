@@ -4,6 +4,7 @@ namespace App\Service\Admin;
 
 use App\Dto\Admin\AdminWorkRequest;
 use App\Entity\Work;
+use App\Entity\WorkRating;
 use App\Repository\GenreRepository;
 use Doctrine\ORM\EntityManagerInterface;
 
@@ -93,9 +94,68 @@ final class WorkAdmin
             $this->replaceGenres($work, $payload->genres);
         }
 
+        $ratingChanged = $this->applyImdb($work, $payload);
+
         $this->entityManager->flush();
 
+        /*
+         * external_score is computed by a trigger, and the entity was loaded
+         * before that trigger ran, so the copy in memory is one edit stale.
+         * Without this the form saves 8.1 and reports the score it had five
+         * seconds ago, which reads as the save not having worked.
+         */
+        if ($ratingChanged) {
+            $this->entityManager->refresh($work);
+        }
+
         return $work;
+    }
+
+    /**
+     * Correcting what IMDb says about a title.
+     *
+     * Setting a rating locks it, because a correction that the next dataset
+     * import quietly reverses is worse than no correction at all — the number
+     * changes back weeks later and nobody remembers why. Unlocking is the way
+     * back: pass imdbLocked false and the next import takes the title over
+     * again.
+     *
+     * external_score follows on its own; a database trigger owns it.
+     *
+     * @return bool whether anything changed, so the caller knows to re-read the
+     *              score the trigger writes
+     */
+    private function applyImdb(Work $work, AdminWorkRequest $payload): bool
+    {
+        if (null === $payload->imdbRating && null === $payload->imdbVotes && null === $payload->imdbLocked) {
+            return false;
+        }
+
+        $rating = $work->getRating(WorkRating::SOURCE_IMDB);
+
+        if (null === $rating) {
+            if (null === $payload->imdbRating) {
+                // Nothing to unlock, and votes alone are not a rating.
+                return false;
+            }
+
+            $rating = (new WorkRating(WorkRating::SOURCE_IMDB))->setScale(10);
+            $work->addRating($rating);
+            $this->entityManager->persist($rating);
+        }
+
+        if (null !== $payload->imdbRating) {
+            $rating->setRating($payload->imdbRating);
+        }
+
+        if (null !== $payload->imdbVotes) {
+            $rating->setVotes($payload->imdbVotes);
+        }
+
+        $rating->setLocked($payload->imdbLocked ?? true);
+        $rating->touch();
+
+        return true;
     }
 
     /**

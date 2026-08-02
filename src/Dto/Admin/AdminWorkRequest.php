@@ -63,6 +63,20 @@ readonly class AdminWorkRequest
 
         #[Assert\All([new Assert\Length(min: 1, max: 80)])]
         public ?array $genres = null,
+
+        /*
+         * IMDb's own units, 0 to 10 with one decimal, because that is the
+         * number on the page you are copying it from. Sending it locks the
+         * rating against the dataset import; imdbLocked: false is how you undo
+         * that and hand the title back to IMDb.
+         */
+        #[Assert\Range(min: 0, max: 10)]
+        public ?float $imdbRating = null,
+
+        #[Assert\Range(min: 0, max: 100000000)]
+        public ?int $imdbVotes = null,
+
+        public ?bool $imdbLocked = null,
     ) {
     }
 }

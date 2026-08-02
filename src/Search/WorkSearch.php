@@ -44,6 +44,16 @@ final class WorkSearch
     private const COUNT_CEILING = 1000;
 
     /**
+     * How many matches a facet counts over: exact for anything narrower,
+     * indicative above it.
+     *
+     * Tied to the count ceiling so the numbers on one page agree with each
+     * other. Sampling deeper than we count reads as a mistake — "1,000+
+     * results" over a chip claiming 1,376 of them are drama.
+     */
+    private const FACET_SAMPLE = self::COUNT_CEILING;
+
+    /**
      * Per-query answers from needsFuzzy(), for the life of one request.
      *
      * @var array<string, bool>
@@ -602,15 +612,43 @@ final class WorkSearch
     }
 
     /**
+     * The matching rows a facet counts over, capped.
+     *
+     * Facets were the most expensive thing left in a broad search: three
+     * GROUP BYs, each visiting every match. For "the" that is 629,461 rows
+     * counted three times over — five of the seven seconds the search page
+     * took, to put a number beside a chip.
+     *
+     * They count over the most popular FACET_SAMPLE matches instead. Anything
+     * narrower than that is counted in full and the numbers are exact; broader
+     * and they describe the part of the result anybody is going to page
+     * through, which is what the chips are for — narrowing a search, not
+     * measuring the catalog.
+     *
+     * @param array<string, mixed> $params
+     */
+    private function sampleSql(SearchCriteria $criteria, string $where, array &$params): string
+    {
+        $params['sample'] = self::FACET_SAMPLE;
+
+        return 'SELECT w.id, w.type, w.year
+                FROM works w '.$this->joins($criteria).'
+                WHERE '.$where.'
+                ORDER BY w.popularity DESC NULLS LAST, w.id DESC
+                LIMIT :sample';
+    }
+
+    /**
      * @return array<string, int>
      */
     private function typeFacet(SearchCriteria $criteria): array
     {
         [$where, $params, $types] = $this->conditions($criteria);
+        $sample = $this->sampleSql($criteria, $where, $params);
+        $types['sample'] = ParameterType::INTEGER;
 
         $rows = $this->connection()->executeQuery(
-            'SELECT w.type, COUNT(*) AS n FROM works w '.$this->joins($criteria).'
-             WHERE '.$where.' GROUP BY w.type',
+            'SELECT w.type, COUNT(*) AS n FROM ('.$sample.') w GROUP BY w.type',
             $params,
             $types,
         )->fetchAllAssociative();
@@ -638,12 +676,14 @@ final class WorkSearch
          * sort every one of them by (slug, work_id) to prove what the primary
          * key already guarantees.
          */
+        $sample = $this->sampleSql($criteria, $where, $params);
+        $types['sample'] = ParameterType::INTEGER;
+
         $rows = $this->connection()->executeQuery(
             'SELECT fg.slug, fg.name, COUNT(*) AS n
-             FROM works w '.$this->joins($criteria).'
+             FROM ('.$sample.') w
              JOIN work_genre fwg ON fwg.work_id = w.id
              JOIN genres fg ON fg.id = fwg.genre_id
-             WHERE '.$where.'
              GROUP BY fg.slug, fg.name
              ORDER BY n DESC, fg.name ASC
              LIMIT 24',
@@ -665,10 +705,13 @@ final class WorkSearch
     {
         [$where, $params, $types] = $this->conditions($criteria);
 
+        $sample = $this->sampleSql($criteria, $where, $params);
+        $types['sample'] = ParameterType::INTEGER;
+
         $rows = $this->connection()->executeQuery(
             'SELECT (w.year / 10) * 10 AS decade, COUNT(*) AS n
-             FROM works w '.$this->joins($criteria).'
-             WHERE '.$where.' AND w.year IS NOT NULL
+             FROM ('.$sample.') w
+             WHERE w.year IS NOT NULL
              GROUP BY decade
              ORDER BY decade DESC',
             $params,

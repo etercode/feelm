@@ -631,10 +631,24 @@ final class WorkSearch
     {
         $params['sample'] = self::FACET_SAMPLE;
 
+        /*
+         * No ORDER BY, and that is the whole optimisation.
+         *
+         * Ordering the sample by popularity means finding the most popular
+         * thousand, which means visiting all 629,461 matches first — the LIMIT
+         * saves the aggregation and none of the scan. Measured on the server:
+         * 1,415ms ordered against 25ms unordered, because unordered lets the
+         * index scan stop as soon as it has a thousand rows.
+         *
+         * Unordered is also the better sample for this purpose. A popularity-
+         * ranked thousand is skewed towards blockbusters, and these counts are
+         * meant to describe the result as a whole — how much of it is drama,
+         * how much is television — so an arbitrary slice represents it more
+         * honestly than the top of it does.
+         */
         return 'SELECT w.id, w.type, w.year
                 FROM works w '.$this->joins($criteria).'
                 WHERE '.$where.'
-                ORDER BY w.popularity DESC NULLS LAST, w.id DESC
                 LIMIT :sample';
     }
 

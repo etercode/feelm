@@ -16,7 +16,24 @@ doctrine:
         # The tmdb_*_ids tables are crawl queues owned entirely by migrations —
         # no entity, and partial indexes DBAL cannot describe. Hiding them from
         # schema comparison keeps `doctrine:schema:validate` meaningful.
+        #
+        # schema_filter matches table names only, which is why the one index
+        # below could not be hidden the same way.
         schema_filter: '~^(?!tmdb_(movie|series)_ids$).*~'
+
+        # KNOWN DRIFT, and the only one: `doctrine:schema:validate` reports
+        #
+        #     DROP INDEX idx_work_search_popular;
+        #
+        # It is not drift. The index is created by Version20260803120000 and is
+        # load-bearing for search — see WorkSearch::pooled(). It cannot be
+        # declared on the entity because it indexes search_vector, a generated
+        # column no entity maps, and Doctrine refuses an index on a column it
+        # does not know. Mapping the column instead would pull a tsvector into
+        # every hydration, which is worse than this note.
+        #
+        # So: mapping errors are real, and exactly one schema difference is
+        # expected. A second one is not.
     orm:
         validate_xml_mapping: true
         naming_strategy: doctrine.orm.naming_strategy.underscore

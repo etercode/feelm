@@ -40,6 +40,7 @@ class SearchController extends AbstractController
             'criteria' => $criteria->toArray(),
             'items' => array_map(fn ($work) => $this->presenter->listItem($work), $result['works']),
             'total' => $result['total'],
+            'totalIsExact' => $result['totalIsExact'],
             'page' => $result['page'],
             'pages' => $result['pages'],
             'hasMore' => $result['hasMore'],
@@ -75,6 +76,7 @@ class SearchController extends AbstractController
             // The overlay draws a poster and a title. See suggestion().
             'items' => array_map(fn ($work) => $this->presenter->suggestion($work), $result['works']),
             'total' => $result['total'],
+            'totalIsExact' => $result['totalIsExact'],
             'suggestion' => $result['suggestion'],
             'people' => array_map(static fn ($person) => [
                 'slug' => $person->getSlug(),

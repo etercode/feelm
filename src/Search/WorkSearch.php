@@ -36,6 +36,14 @@ final class WorkSearch
     private const RELEVANCE_POOL = 3000;
 
     /**
+     * Where counting stops and "and more" begins.
+     *
+     * Above this the exact figure is not worth 1.4 seconds of anybody's search,
+     * and the pager only needs to know there is another page.
+     */
+    private const COUNT_CEILING = 1000;
+
+    /**
      * Per-query answers from needsFuzzy(), for the life of one request.
      *
      * @var array<string, bool>
@@ -73,21 +81,44 @@ final class WorkSearch
          * It gets one row more than it asked for instead, which answers the
          * only other question a pager has: is there a page after this one.
          */
+        /*
+         * Counted up to a ceiling, not exhaustively.
+         *
+         * There is no way to know how many of seven hundred thousand rows match
+         * without visiting all of them, and for a two-letter prefix that is
+         * 305,242 of them — 1.4 seconds on the server, spent to print a number
+         * nobody reads digit by digit. Stopping at COUNT_CEILING costs the
+         * exact figure only for searches too broad to have one worth printing,
+         * and totalIsExact says which kind came back so the UI can write
+         * "1,000+" rather than claim a precision it does not have.
+         */
         $total = null;
+        $exact = true;
         if ($withTotal) {
             $total = (int) $this->connection()->executeQuery(
-                'SELECT COUNT(*) FROM works w '.$this->joins($criteria).' WHERE '.$where,
+                'SELECT COUNT(*) FROM (
+                    SELECT 1 FROM works w '.$this->joins($criteria).' WHERE '.$where.'
+                    LIMIT '.self::COUNT_CEILING.'
+                 ) capped',
                 $params,
                 $types,
             )->fetchOne();
+            $exact = $total < self::COUNT_CEILING;
         }
 
-        $ids = $this->ids($criteria, $where, $params, $types, $withTotal ? 0 : 1);
-        $hasMore = $withTotal
+        /*
+         * One row over the limit whenever the total cannot settle the question.
+         * A capped total says "at least a thousand" and nothing about where the
+         * last page falls, so at offset 990 the arithmetic below would conclude
+         * there is nothing after it — with 305,242 rows still to come.
+         */
+        $overfetch = $withTotal && $exact ? 0 : 1;
+        $ids = $this->ids($criteria, $where, $params, $types, $overfetch);
+        $hasMore = 0 === $overfetch
             ? $criteria->offset() + \count($ids) < $total
             : \count($ids) > $criteria->limit;
 
-        if (!$withTotal) {
+        if ($overfetch > 0) {
             $ids = \array_slice($ids, 0, $criteria->limit);
         }
 
@@ -101,9 +132,12 @@ final class WorkSearch
         return [
             'works' => $this->hydrate($ids),
             'total' => $total,
+            // False when the count stopped at the ceiling: the caller has a
+            // floor, not a figure, and should print it as one.
+            'totalIsExact' => $exact,
             'page' => $criteria->page,
             'limit' => $criteria->limit,
-            'pages' => null === $total ? null : (int) ceil($total / $criteria->limit),
+            'pages' => null === $total || !$exact ? null : (int) ceil($total / $criteria->limit),
             'hasMore' => $hasMore,
             'matched' => null === $total ? [] !== $ids : $total > 0,
             'suggestion' => $suggestion,

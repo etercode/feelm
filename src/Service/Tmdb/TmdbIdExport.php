@@ -50,7 +50,7 @@ final class TmdbIdExport
      * has dated could be from any year, and guessing would silently crawl the
      * decades the year filter was meant to skip.
      */
-    public function remaining(?int $since = null): int
+    public function remaining(?int $since = null, ?float $minPopularity = null): int
     {
         $sql = "SELECT COUNT(*) FROM tmdb_movie_ids e
                 WHERE e.crawled_at IS NULL
@@ -65,6 +65,11 @@ final class TmdbIdExport
             $params['since'] = $since;
         }
 
+        if (null !== $minPopularity) {
+            $sql .= ' AND e.popularity >= :minPopularity';
+            $params['minPopularity'] = $minPopularity;
+        }
+
         return (int) $this->connection->executeQuery($sql, $params)->fetchOne();
     }
 
@@ -73,9 +78,16 @@ final class TmdbIdExport
      * first. An anti-join, so nothing needs remembering between runs — a title
      * leaves the queue by virtue of existing.
      *
+     * `$minPopularity` is what makes a backfill finish. Ordering by popularity
+     * already puts the recognisable titles first, but a run has no idea when it
+     * has passed them — the tail of any decade is tens of thousands of shorts
+     * and industrial films nobody will search for. A floor turns "crawl the
+     * 1970s" into a job with an end, and 1 is the same line the partial search
+     * index draws for a title worth ranking.
+     *
      * @return list<int>
      */
-    public function nextIds(int $limit, ?int $since = null): array
+    public function nextIds(int $limit, ?int $since = null, ?float $minPopularity = null): array
     {
         // crawled_at narrows the scan; the anti-join is the correctness net.
         $sql = "SELECT e.tmdb_id FROM tmdb_movie_ids e
@@ -91,6 +103,11 @@ final class TmdbIdExport
             $sql .= ' AND e.release_year >= :since';
             $params['since'] = $since;
             $types['since'] = ParameterType::INTEGER;
+        }
+
+        if (null !== $minPopularity) {
+            $sql .= ' AND e.popularity >= :minPopularity';
+            $params['minPopularity'] = $minPopularity;
         }
 
         $sql .= ' ORDER BY e.popularity DESC, e.tmdb_id LIMIT :limit';

@@ -54,6 +54,7 @@ final class CatalogCrawlAllCommand extends Command
         $this
             ->addOption('limit', null, InputOption::VALUE_REQUIRED, 'How many titles to fetch this run', '500')
             ->addOption('since', null, InputOption::VALUE_REQUIRED, 'Only crawl titles released in this year or later (needs app:catalog:queue)')
+            ->addOption('min-popularity', null, InputOption::VALUE_REQUIRED, 'Skip titles below this TMDB popularity. 1 is roughly "somebody has heard of it"')
             ->addOption('refresh-export', null, InputOption::VALUE_NONE, 'Re-download the id export even if it is fresh')
             ->addOption('concurrency', null, InputOption::VALUE_REQUIRED, 'Requests in flight at once. One at a time is latency-bound at ~4/s', '8')
             ->addOption('media', null, InputOption::VALUE_REQUIRED, "Artwork to keep a copy of: none, posters, all. Anything not copied still displays from TMDB's CDN", 'none')
@@ -65,7 +66,7 @@ final class CatalogCrawlAllCommand extends Command
         $io = new SymfonyStyle($input, $output);
 
         if ($input->getOption('status')) {
-            return $this->status($io, null !== $input->getOption('since') ? (int) $input->getOption('since') : null);
+            return $this->status($io, $this->since($input), $this->floor($input));
         }
 
         if (!$this->tmdb->isConfigured()) {
@@ -88,13 +89,16 @@ final class CatalogCrawlAllCommand extends Command
 
             return Command::FAILURE;
         }
-        $since = null !== $input->getOption('since') ? (int) $input->getOption('since') : null;
-        $ids = $this->export->nextIds($limit, $since);
+        $since = $this->since($input);
+        $floor = $this->floor($input);
+        $ids = $this->export->nextIds($limit, $since, $floor);
 
         if ([] === $ids) {
-            $io->success(null === $since
-                ? 'Every exported movie is already in the catalog.'
-                : sprintf('Every queued title from %d onwards is already in the catalog. Run app:catalog:queue --since=%d if the queue is not filled yet.', $since, $since));
+            $io->success(match (true) {
+                null !== $floor => sprintf('Nothing left above popularity %s%s. Lower --min-popularity to go further down the tail.', $floor, null === $since ? '' : ' from '.$since.' onwards'),
+                null === $since => 'Every exported movie is already in the catalog.',
+                default => sprintf('Every queued title from %d onwards is already in the catalog. Run app:catalog:queue --since=%d if the queue is not filled yet.', $since, $since),
+            });
 
             return Command::SUCCESS;
         }
@@ -180,7 +184,7 @@ final class CatalogCrawlAllCommand extends Command
         }
 
         $elapsed = microtime(true) - $started;
-        $remaining = $this->export->remaining($since);
+        $remaining = $this->export->remaining($since, $floor);
 
         $io->success(sprintf(
             '%s stored, %s gone from TMDB, %s failed, %.1f titles/sec. %s left%s.',
@@ -205,10 +209,22 @@ final class CatalogCrawlAllCommand extends Command
         return Command::SUCCESS;
     }
 
-    private function status(SymfonyStyle $io, ?int $since): int
+    private function since(InputInterface $input): ?int
+    {
+        return null !== $input->getOption('since') ? (int) $input->getOption('since') : null;
+    }
+
+    private function floor(InputInterface $input): ?float
+    {
+        return null !== $input->getOption('min-popularity')
+            ? (float) $input->getOption('min-popularity')
+            : null;
+    }
+
+    private function status(SymfonyStyle $io, ?int $since, ?float $floor = null): int
     {
         $total = $this->export->count();
-        $remaining = $this->export->remaining($since);
+        $remaining = $this->export->remaining($since, $floor);
         $inCatalog = $this->works->countByType('movie');
 
         $rows = [
@@ -219,6 +235,10 @@ final class CatalogCrawlAllCommand extends Command
 
         if (null !== $since) {
             $rows[] = ['Queued from '.$since => number_format($this->export->remaining($since) + $inCatalog)];
+        }
+
+        if (null !== $floor) {
+            $rows[] = ['Popularity floor' => (string) $floor];
         }
 
         $rows[] = ['Still to fetch' => number_format($remaining)];

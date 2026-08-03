@@ -32,6 +32,18 @@ use Symfony\Contracts\HttpClient\HttpClientInterface;
 final class CatalogMirrorMediaCommand extends Command
 {
     /**
+     * Returned when the queue is empty and there is nothing left to mirror.
+     *
+     * A runner loop needs to know when to stop, and the alternative was having
+     * it grep this command's prose for a number — which is brittle in the
+     * ordinary case and wrong in the interesting one: a `docker compose exec`
+     * that fails while the container restarts prints nothing at all, and an
+     * empty string parses as neither "done" nor "not done". An exit code says
+     * it once, unambiguously, and survives the output being lost.
+     */
+    private const NOTHING_LEFT = 2;
+
+    /**
      * Rows per batch.
      *
      * Every image is one download and one upload, and the upload crosses to
@@ -217,6 +229,7 @@ final class CatalogMirrorMediaCommand extends Command
 
         $elapsed = microtime(true) - $started;
         $remaining = $this->remaining($postersOnly);
+        $emptied = 0 === $remaining;
 
         $io->success(sprintf(
             '%s images (%s MB) in %s. %s failed. %s works still to do%s.',
@@ -230,7 +243,7 @@ final class CatalogMirrorMediaCommand extends Command
                 : '',
         ));
 
-        return Command::SUCCESS;
+        return $emptied ? self::NOTHING_LEFT : Command::SUCCESS;
     }
 
     /**

@@ -437,11 +437,15 @@ final class WorkPresenter
     }
 
     /**
-     * @return list<array{name: string, character: string|null, photo: string|null}>
+     * The slug carries because a cast list is a set of links now — see the
+     * person page. Without it every name is a dead end, which is what it was.
+     *
+     * @return list<array{slug: string|null, name: string, character: string|null, photo: string|null}>
      */
     private function cast(Work $work): array
     {
         return array_map(fn (Credit $credit) => [
+            'slug' => $credit->getPerson()?->getSlug(),
             'name' => (string) $credit->getPerson()?->getName(),
             'character' => $credit->getCharacterName(),
             'photo' => $this->urls->media($credit->getPerson()?->getPhoto()),

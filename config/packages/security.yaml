@@ -59,6 +59,9 @@ security:
         # gathered into one response. Public for the same reason they are.
         - { path: ^/api/home, methods: [GET], roles: PUBLIC_ACCESS }
         - { path: ^/api/users, methods: [GET], roles: PUBLIC_ACCESS }
+        # A person and their filmography. The same works /api/items already
+        # serves, arranged around one name instead of a filter.
+        - { path: ^/api/people, methods: [GET], roles: PUBLIC_ACCESS }
         # Crawl progress: counts and titles already public through /api/items.
         - { path: ^/api/crawl, methods: [GET], roles: PUBLIC_ACCESS }
         # The floor for the admin API. Endpoints that write roles or delete

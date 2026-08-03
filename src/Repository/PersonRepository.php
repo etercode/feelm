@@ -4,6 +4,7 @@ namespace App\Repository;
 
 use App\Entity\Person;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
+use Doctrine\DBAL\ParameterType;
 use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\Persistence\ManagerRegistry;
 
@@ -97,6 +98,47 @@ class PersonRepository extends ServiceEntityRepository
             ->setMaxResults($limit)
             ->getQuery()
             ->getResult();
+    }
+
+    public function findBySlug(string $slug): ?Person
+    {
+        return $this->findOneBy(['slug' => $slug]);
+    }
+
+    /**
+     * Everything a person is credited on, most popular first.
+     *
+     * One query rather than one per role. A prolific actor is on hundreds of
+     * titles, and asking separately for cast, then director, then writer would
+     * scan the same rows three times — the role comes back with the work id and
+     * the caller groups them.
+     *
+     * Ids only. Hydrating is WorkHydrator's job, and it is the only way to draw
+     * a wall of posters without a query per card.
+     *
+     * `idx_credit_person` is (person_id, role), so the lookup is an index scan;
+     * the sort is over one person's credits, which is hundreds of rows at worst.
+     *
+     * @return list<array{workId: int, role: string, character: ?string}>
+     */
+    public function creditsFor(int $personId, int $limit = 200): array
+    {
+        $rows = $this->getEntityManager()->getConnection()->executeQuery(
+            "SELECT c.work_id, c.role, NULLIF(c.character_name, '') AS character_name
+             FROM credits c
+             JOIN works w ON w.id = c.work_id
+             WHERE c.person_id = :person AND w.deleted_at IS NULL
+             ORDER BY w.popularity DESC NULLS LAST, w.id DESC
+             LIMIT :limit",
+            ['person' => $personId, 'limit' => $limit],
+            ['person' => ParameterType::INTEGER, 'limit' => ParameterType::INTEGER],
+        )->fetchAllAssociative();
+
+        return array_map(static fn (array $row) => [
+            'workId' => (int) $row['work_id'],
+            'role' => (string) $row['role'],
+            'character' => $row['character_name'] ?? null,
+        ], $rows);
     }
 
     /* -------------------------------------------------------------- admin */

@@ -12,6 +12,8 @@ use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Contracts\Cache\CacheInterface;
+use Symfony\Contracts\Cache\ItemInterface;
 
 /**
  * Catalog search: full text, the whole filter set, facet counts for the panel,
@@ -19,6 +21,21 @@ use Symfony\Component\Routing\Attribute\Route;
  */
 class SearchController extends AbstractController
 {
+    /**
+     * How long the filter panel's contents are served from cache.
+     *
+     * Every one of those lists is an aggregate over the whole works table —
+     * two of them a GROUP BY across 955,000 rows — and together they measured
+     * 1.64s on production. The search page fetches them in parallel with the
+     * search itself, so they were what the page waited on: the results came
+     * back in 425ms and the page took 2.5 seconds.
+     *
+     * An hour, because the answers only change when the crawl adds a title,
+     * and it runs once a night. A new certification appearing an hour late in
+     * a filter dropdown is not a thing anybody can notice.
+     */
+    private const FILTERS_CACHE_SECONDS = 3600;
+
     public function __construct(
         private readonly WorkSearch $search,
         private readonly WorkPresenter $presenter,
@@ -91,9 +108,27 @@ class SearchController extends AbstractController
      * range it covers.
      */
     #[Route('/api/search/filters', name: 'api_search_filters', methods: ['GET'])]
-    public function filters(): JsonResponse
+    public function filters(CacheInterface $cache): JsonResponse
     {
-        return $this->json([
+        return $this->json($cache->get(
+            'search.filters',
+            function (ItemInterface $item): array {
+                $item->expiresAfter(self::FILTERS_CACHE_SECONDS);
+
+                return $this->buildFilters();
+            },
+            // No early expiration: recomputing is the entire cost, and one
+            // reader is not a herd to protect against. See CrawlController.
+            0.0,
+        ));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function buildFilters(): array
+    {
+        return [
             'genres' => array_map(static fn ($genre) => [
                 'slug' => $genre->getSlug(),
                 'name' => $genre->getName(),
@@ -104,6 +139,6 @@ class SearchController extends AbstractController
             // Only the decades that actually hold something — see decades().
             'decades' => $this->works->decades(),
             'sorts' => SearchCriteria::SORTS,
-        ]);
+        ];
     }
 }

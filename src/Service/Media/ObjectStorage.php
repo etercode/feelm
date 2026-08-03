@@ -324,6 +324,27 @@ final class ObjectStorage
                 'key' => $this->key,
                 'secret' => $this->secret,
             ],
+            /*
+             * Contabo throttles, and says so in a way the SDK cannot read.
+             *
+             * A refused request comes back as `429 Too Many Requests` with a
+             * JSON body — {"message":"Too many requests"} — where the S3
+             * protocol says XML. The SDK tries to parse it, fails, and reports
+             * "Unable to parse error information from response: String could
+             * not be parsed as XML", which is what every mysterious upload
+             * failure in this project has actually been.
+             *
+             * The status code survives that, and the standard retry mode
+             * classifies 429 as throttling, so it backs off and tries again
+             * rather than surfacing the confusion. Ten attempts because the
+             * mirror runs forty uploads at once for hours and will meet this
+             * often; the backoff is exponential with jitter, so the late
+             * attempts are seconds apart rather than milliseconds.
+             */
+            'retries' => [
+                'mode' => 'standard',
+                'max_attempts' => 10,
+            ],
         ]);
     }
 }

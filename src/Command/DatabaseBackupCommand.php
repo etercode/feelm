@@ -14,11 +14,15 @@ use Symfony\Component\Console\Style\SymfonyStyle;
  * Sends a database dump to the bucket and keeps the last few.
  *
  * The dump arrives on standard input rather than being taken here, because
- * `pg_dump` lives in the database container and this runs in the PHP one. The
- * wrapper in deploy/backup-db.sh pipes one into the other, which is also what
- * keeps the whole thing streaming: several gigabytes go from Postgres to
- * Singapore without ever being a string in PHP or, on a good day, a file on
- * disk.
+ * `pg_dump` lives in the database container and this runs in the PHP one; the
+ * wrapper in deploy/backup-db.sh pipes one into the other.
+ *
+ * It is then spooled to a file before being sent. Piping straight through was
+ * the first design and it is the better one right up until an upload fails:
+ * Contabo dropped part 29 of the first real backup, and re-sending a part means
+ * seeking back to it, which a pipe cannot do. Never a string in PHP either way
+ * — gigabytes go through in chunks — but a few gigabytes of disk is what buys
+ * the retry.
  *
  * Offsite is the point. A backup on the same disk as the database survives a
  * dropped table and nothing else — not a failed disk, not a lost VPS, not the
@@ -80,26 +84,41 @@ final class DatabaseBackupCommand extends Command
             (new \DateTimeImmutable())->format('Y-m-d-His'),
         );
 
-        $stream = fopen('php://stdin', 'rb');
-        if (false === $stream) {
-            $io->error('Could not read the dump from stdin.');
+        $started = microtime(true);
+
+        /*
+         * Spooled to a file before it is sent, rather than piped straight
+         * through. Contabo sheds load — the first real backup lost part 29 to a
+         * response the SDK could not parse — and recovering means sending that
+         * part again, which means seeking back to it. A pipe only goes
+         * forwards. Disk is the price of being able to retry, and it is a few
+         * gigabytes against 71 free.
+         */
+        $spool = tempnam(sys_get_temp_dir(), 'feelm-dump-');
+        if (false === $spool) {
+            $io->error('Could not create a temporary file for the dump.');
 
             return Command::FAILURE;
         }
 
-        $started = microtime(true);
-        $io->writeln(sprintf('Uploading %s …', $key));
-
         try {
-            $this->storage->putStream($key, $stream, 'application/octet-stream');
+            $io->writeln('Reading the dump …');
+            $bytes = $this->spool($spool);
+
+            if (0 === $bytes) {
+                $io->error('The dump was empty. Nothing has been backed up.');
+
+                return Command::FAILURE;
+            }
+
+            $io->writeln(sprintf('  %s MB read, uploading %s …', number_format($bytes / 1048576, 1), $key));
+            $this->storage->putFile($key, $spool, 'application/octet-stream');
         } catch (\Throwable $e) {
             $io->error('Upload failed: '.$e->getMessage());
 
             return Command::FAILURE;
         } finally {
-            if (\is_resource($stream)) {
-                fclose($stream);
-            }
+            @unlink($spool);
         }
 
         $stored = $this->storage->listKeys(self::PREFIX);
@@ -108,19 +127,6 @@ final class DatabaseBackupCommand extends Command
             if ($object['key'] === $key) {
                 $size = $object['size'];
             }
-        }
-
-        /*
-         * An empty object means pg_dump wrote nothing — a wrong password, a
-         * container that was not up. Left in place it would push a real backup
-         * out of the retention window, so it is removed and the run fails
-         * loudly rather than reporting success over an empty file.
-         */
-        if (0 === $size) {
-            $this->storage->delete($key);
-            $io->error('The dump was empty — removed. Nothing has been backed up.');
-
-            return Command::FAILURE;
         }
 
         $io->writeln(sprintf(
@@ -145,6 +151,32 @@ final class DatabaseBackupCommand extends Command
         ));
 
         return Command::SUCCESS;
+    }
+
+    /**
+     * Copies stdin to a file, returning how many bytes arrived.
+     *
+     * In chunks, because the dump is gigabytes and the point of a file is to
+     * avoid holding it in memory — reading it into a string first would defeat
+     * the whole arrangement.
+     */
+    private function spool(string $path): int
+    {
+        $in = fopen('php://stdin', 'rb');
+        $out = fopen($path, 'wb');
+
+        if (false === $in || false === $out) {
+            throw new \RuntimeException('Could not open the dump for spooling.');
+        }
+
+        try {
+            $bytes = stream_copy_to_stream($in, $out);
+        } finally {
+            fclose($in);
+            fclose($out);
+        }
+
+        return false === $bytes ? 0 : $bytes;
     }
 
     private function list(SymfonyStyle $io): int

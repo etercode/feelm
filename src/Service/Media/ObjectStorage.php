@@ -3,6 +3,7 @@
 namespace App\Service\Media;
 
 use Aws\CommandPool;
+use Aws\Exception\MultipartUploadException;
 use Aws\S3\MultipartUploader;
 use GuzzleHttp\Psr7\Utils;
 use Aws\Exception\AwsException;
@@ -148,50 +149,56 @@ final class ObjectStorage
     }
 
     /**
-     * Streams an object up without ever holding it in memory.
+     * Uploads a file in parts, retrying the parts that fail.
      *
-     * For the nightly database dump, which is gigabytes: `put()` takes a string
-     * and a string that size is not a thing to build in PHP.
+     * Takes a path rather than a stream, and that is the whole point. Contabo
+     * sheds load — it returned a body the SDK could not parse as XML on part 29
+     * of the first real database backup, while the artwork mirror was busy —
+     * and recovering from that means sending the failed part again. Re-sending
+     * a part means seeking back to it, and the obvious design here, piping
+     * pg_dump straight through, cannot: a pipe only goes forwards. So the
+     * caller spools to a file first and this reads from that.
      *
-     * MultipartUploader rather than the more obvious ObjectUploader, which
-     * fails on a pipe with "Unable to determine stream position": it decides
-     * between a single PUT and a multipart by measuring the body, and a dump
-     * arriving on stdin has no length until it ends and cannot be rewound to
-     * find one. Multipart reads forward in parts and never needs to know.
+     * Three attempts, each resuming from the last one's state so only the
+     * missing parts are retried rather than the whole upload.
      *
-     * 16 MB parts: the floor is 5, and at Singapore's 186ms round trip the
-     * per-part overhead is what costs, so fewer and larger wins. Four in flight
-     * for the same reason.
-     *
-     * @param resource $stream
+     * @throws MultipartUploadException when the parts still will not land
      */
-    public function putStream(string $key, $stream, string $contentType): string
+    public function putFile(string $key, string $path, string $contentType): string
     {
-        /*
-         * Wrapped rather than handed over raw. A pipe cannot answer ftell(),
-         * and Guzzle throws "Unable to determine stream position" the moment
-         * the uploader asks — which it does before reading a byte. Utils's
-         * pump stream counts what it has handed out and answers from that, so
-         * position works while the underlying pipe stays a pipe and nothing is
-         * ever buffered whole.
-         */
-        $source = Utils::streamFor(static function (int $length) use ($stream): string|false {
-            $chunk = fread($stream, $length);
-
-            // '' would look like a short read; false is how a pump stream is
-            // told the source has ended.
-            return '' === $chunk || false === $chunk ? false : $chunk;
-        });
-
-        (new MultipartUploader($this->client(), $source, [
+        $options = [
             'bucket' => $this->bucket,
             'key' => $key,
+            // 16 MB: the floor is 5, and at Singapore's 186ms round trip the
+            // per-part overhead is what costs, so fewer and larger wins.
             'part_size' => 16 * 1024 * 1024,
-            'concurrency' => 4,
+            // Three, not the eight the SDK defaults to. This runs alongside the
+            // artwork mirror, and that already sits at the level where Contabo
+            // starts refusing.
+            'concurrency' => 3,
             'params' => ['ContentType' => $contentType],
-        ]))->upload();
+        ];
 
-        return $key;
+        $uploader = new MultipartUploader($this->client(), $path, $options);
+
+        for ($attempt = 1; ; ++$attempt) {
+            try {
+                $uploader->upload();
+
+                return $key;
+            } catch (MultipartUploadException $e) {
+                if ($attempt >= 3) {
+                    throw $e;
+                }
+
+                // Resuming from the failed state re-sends only the parts that
+                // did not land; a fresh uploader would start from part one.
+                $uploader = new MultipartUploader($this->client(), $path, [
+                    ...$options,
+                    'state' => $e->getState(),
+                ]);
+            }
+        }
     }
 
     /**

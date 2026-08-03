@@ -3,6 +3,8 @@
 namespace App\Service\Media;
 
 use Aws\CommandPool;
+use Aws\S3\MultipartUploader;
+use GuzzleHttp\Psr7\Utils;
 use Aws\Exception\AwsException;
 use Aws\S3\S3Client;
 
@@ -143,6 +145,93 @@ final class ObjectStorage
         ]))->promise()->wait();
 
         return ['stored' => $stored, 'failed' => $failed];
+    }
+
+    /**
+     * Streams an object up without ever holding it in memory.
+     *
+     * For the nightly database dump, which is gigabytes: `put()` takes a string
+     * and a string that size is not a thing to build in PHP.
+     *
+     * MultipartUploader rather than the more obvious ObjectUploader, which
+     * fails on a pipe with "Unable to determine stream position": it decides
+     * between a single PUT and a multipart by measuring the body, and a dump
+     * arriving on stdin has no length until it ends and cannot be rewound to
+     * find one. Multipart reads forward in parts and never needs to know.
+     *
+     * 16 MB parts: the floor is 5, and at Singapore's 186ms round trip the
+     * per-part overhead is what costs, so fewer and larger wins. Four in flight
+     * for the same reason.
+     *
+     * @param resource $stream
+     */
+    public function putStream(string $key, $stream, string $contentType): string
+    {
+        /*
+         * Wrapped rather than handed over raw. A pipe cannot answer ftell(),
+         * and Guzzle throws "Unable to determine stream position" the moment
+         * the uploader asks — which it does before reading a byte. Utils's
+         * pump stream counts what it has handed out and answers from that, so
+         * position works while the underlying pipe stays a pipe and nothing is
+         * ever buffered whole.
+         */
+        $source = Utils::streamFor(static function (int $length) use ($stream): string|false {
+            $chunk = fread($stream, $length);
+
+            // '' would look like a short read; false is how a pump stream is
+            // told the source has ended.
+            return '' === $chunk || false === $chunk ? false : $chunk;
+        });
+
+        (new MultipartUploader($this->client(), $source, [
+            'bucket' => $this->bucket,
+            'key' => $key,
+            'part_size' => 16 * 1024 * 1024,
+            'concurrency' => 4,
+            'params' => ['ContentType' => $contentType],
+        ]))->upload();
+
+        return $key;
+    }
+
+    /**
+     * Keys under a prefix, newest first, with their size.
+     *
+     * @return list<array{key: string, size: int, modified: ?\DateTimeImmutable}>
+     */
+    public function listKeys(string $prefix): array
+    {
+        $out = [];
+        $token = null;
+
+        do {
+            $page = $this->client()->listObjectsV2(array_filter([
+                'Bucket' => $this->bucket,
+                'Prefix' => $prefix,
+                'ContinuationToken' => $token,
+            ]));
+
+            foreach ($page['Contents'] ?? [] as $object) {
+                $out[] = [
+                    'key' => (string) $object['Key'],
+                    'size' => (int) ($object['Size'] ?? 0),
+                    'modified' => isset($object['LastModified'])
+                        ? \DateTimeImmutable::createFromInterface($object['LastModified'])
+                        : null,
+                ];
+            }
+
+            $token = $page['IsTruncated'] ?? false ? $page['NextContinuationToken'] ?? null : null;
+        } while (null !== $token);
+
+        usort($out, static fn (array $a, array $b) => strcmp($b['key'], $a['key']));
+
+        return $out;
+    }
+
+    public function delete(string $key): void
+    {
+        $this->client()->deleteObject(['Bucket' => $this->bucket, 'Key' => $key]);
     }
 
     public function exists(string $key): bool

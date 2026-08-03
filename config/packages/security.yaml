@@ -62,6 +62,9 @@ security:
         # A person and their filmography. The same works /api/items already
         # serves, arranged around one name instead of a filter.
         - { path: ^/api/people, methods: [GET], roles: PUBLIC_ACCESS }
+        # What a client needs before it can ask anything else, including before
+        # it has a token. Constants and limits, nothing about anybody.
+        - { path: ^/api/meta, methods: [GET], roles: PUBLIC_ACCESS }
         # Crawl progress: counts and titles already public through /api/items.
         - { path: ^/api/crawl, methods: [GET], roles: PUBLIC_ACCESS }
         # The floor for the admin API. Endpoints that write roles or delete

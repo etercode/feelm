@@ -36,12 +36,19 @@ final class CrawlController extends AbstractController
      * How long a status answer is served from cache.
      *
      * Counting the catalog twice — once for the type, once for the popular tier
-     * — is two sequential scans of a 1.5 GB table, and the page polls every ten
-     * seconds from every tab anybody leaves open. Half a poll interval means at
-     * most one pass through the table per five seconds however many people are
-     * watching, and nothing on this page is worth being fresher than that.
+     * — costs a second or so, and the page polls every ten seconds from every
+     * tab anybody leaves open. Worse while a crawl is running: the inserts keep
+     * the visibility map stale, so even the index-only scan over the popular
+     * tier fetches 129,000 heap rows and takes 490ms. That is exactly when
+     * somebody is watching this page.
+     *
+     * Longer than the poll interval on purpose. At ten seconds every poll would
+     * arrive to find the entry just expired and pay for it; at fifteen, two
+     * polls in three are free and the database does one pass per fifteen
+     * seconds however many people are watching. Numbers up to fifteen seconds
+     * old, on a job measured in hours, is not a cost anybody can perceive.
      */
-    private const CACHE_SECONDS = 5;
+    private const CACHE_SECONDS = 15;
 
     /** Which queue table backs which type. */
     private const QUEUES = [
@@ -84,6 +91,14 @@ final class CrawlController extends AbstractController
 
                 return $this->measure($type);
             },
+            /*
+             * Beta 0 turns off early expiration. Its job is to stop a herd of
+             * requests recomputing at once, and with a five-second window it
+             * was firing on half of them — the recompute is the whole cost
+             * here, so probabilistic refresh was spending most of what the
+             * cache saved. One reader on a phone has no herd to protect.
+             */
+            0.0,
         ));
     }
 

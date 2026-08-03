@@ -4,6 +4,7 @@ namespace App\Controller\Api;
 
 use App\Dto\ChangePasswordRequest;
 use App\Dto\ChooseHandleRequest;
+use App\Dto\UpdatePreferencesRequest;
 use App\Dto\UpdateProfileRequest;
 use App\Entity\User;
 use App\Presenter\UserPresenter;
@@ -38,6 +39,29 @@ class MeController extends AbstractController
             ->setTagline($this->cleaned($payload->tagline))
             ->setBio($this->cleaned($payload->bio))
             ->setLocation($this->cleaned($payload->location));
+
+        $entityManager->flush();
+
+        return $this->json(UserPresenter::self($user));
+    }
+
+    /**
+     * Language and timezone, saved on their own.
+     *
+     * The browser has already switched by the time this is called — the choice
+     * is applied locally and written to a cookie first, so the site never waits
+     * on a round trip to change language. This is what makes the choice follow
+     * the account to the next device.
+     */
+    #[Route('/api/me/preferences', name: 'api_me_preferences', methods: ['PATCH'], format: 'json')]
+    public function preferences(
+        #[MapRequestPayload] UpdatePreferencesRequest $payload,
+        #[CurrentUser] User $user,
+        EntityManagerInterface $entityManager,
+    ): JsonResponse {
+        $user
+            ->setLocale($payload->locale)
+            ->setTimezone($payload->timezone);
 
         $entityManager->flush();
 

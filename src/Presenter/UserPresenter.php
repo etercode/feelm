@@ -42,6 +42,13 @@ final class UserPresenter
             'email' => $user->getEmail(),
             'emailVerified' => $user->isEmailVerified(),
             /*
+             * Display preferences, and private ones: which language somebody
+             * reads in and what zone they keep is nobody else's business, so
+             * they sit here rather than in one().
+             */
+            'locale' => $user->getLocale(),
+            'timezone' => $user->getTimezone(),
+            /*
              * What was granted, not what the firewall expands it to: the front
              * end only needs to know whether to offer the admin link, and
              * shipping the expansion would imply the browser can be trusted

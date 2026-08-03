@@ -43,6 +43,22 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
      */
     public const ASSIGNABLE_ROLES = [self::ROLE_MODERATOR, self::ROLE_ADMIN];
 
+    public const DEFAULT_LOCALE = 'en';
+
+    public const DEFAULT_TIMEZONE = 'UTC';
+
+    /**
+     * The languages the site has a dictionary for.
+     *
+     * This list is the contract between the two halves of the application: the
+     * front end ships one message file per entry and the API refuses anything
+     * that is not one. Adding a language means adding it in both places, and
+     * the order here is the order the settings dropdown offers them in.
+     *
+     * @var list<string>
+     */
+    public const SUPPORTED_LOCALES = ['en', 'az', 'tr', 'ru'];
+
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column]
@@ -100,6 +116,29 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
 
     #[ORM\Column(length: 120, nullable: true)]
     private ?string $location = null;
+
+    /**
+     * Which language to render the site in, as a bare ISO 639-1 code.
+     *
+     * Not nullable and not "whatever the browser asked for": the browser header
+     * is a decent first guess and the front end uses it as one, but once
+     * somebody has picked, that pick has to travel with the account rather than
+     * with the device. Anything outside SUPPORTED_LOCALES never reaches the
+     * column — the setter is the gate, because a stray value here would be a
+     * missing dictionary at render time.
+     */
+    #[ORM\Column(length: 5, options: ['default' => self::DEFAULT_LOCALE])]
+    private string $locale = self::DEFAULT_LOCALE;
+
+    /**
+     * An IANA zone name — "Asia/Baku", not "+04:00".
+     *
+     * Offsets go stale twice a year; names do not. Everything stored is UTC, so
+     * this is purely a display instruction, which is why it lives next to the
+     * language rather than anywhere near the timestamps themselves.
+     */
+    #[ORM\Column(length: 64, options: ['default' => self::DEFAULT_TIMEZONE])]
+    private string $timezone = self::DEFAULT_TIMEZONE;
 
     /**
      * Public path to the uploaded portrait, e.g. "/media/avatars/7-a1b2c3.jpg".
@@ -308,6 +347,54 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
     public function setLocation(?string $location): static
     {
         $this->location = $location;
+
+        return $this;
+    }
+
+    public function getLocale(): string
+    {
+        return $this->locale;
+    }
+
+    /**
+     * Silently falls back rather than throwing.
+     *
+     * A language this build cannot render is not a client error worth a 422 —
+     * it is a language we have not shipped yet, and the honest answer to that
+     * is English. Callers that do want to reject it validate before they get
+     * here; the DTO does exactly that.
+     */
+    public function setLocale(?string $locale): static
+    {
+        $locale = strtolower(trim((string) $locale));
+
+        $this->locale = \in_array($locale, self::SUPPORTED_LOCALES, true)
+            ? $locale
+            : self::DEFAULT_LOCALE;
+
+        return $this;
+    }
+
+    public function getTimezone(): string
+    {
+        return $this->timezone;
+    }
+
+    /**
+     * Checked against the system's zone database, not a list of our own.
+     *
+     * There are ~420 IANA zones and they change — Türkiye dropped its DST in
+     * 2016 and got a new one. Hardcoding a subset here would mean shipping a
+     * release every time the tzdata package moved, so the question asked is
+     * simply whether PHP knows the name.
+     */
+    public function setTimezone(?string $timezone): static
+    {
+        $timezone = trim((string) $timezone);
+
+        $this->timezone = \in_array($timezone, \DateTimeZone::listIdentifiers(), true)
+            ? $timezone
+            : self::DEFAULT_TIMEZONE;
 
         return $this;
     }

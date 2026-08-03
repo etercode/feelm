@@ -37,6 +37,19 @@ final class ObjectStorage
         private readonly string $key,
         private readonly string $secret,
         private readonly string $bucket,
+        /**
+         * A second bucket for anything that must not be world-readable.
+         *
+         * The artwork bucket is public by design — a poster is meant to be
+         * fetched by any browser — and on Contabo that is a property of the
+         * bucket, not of the object: a database dump written beside the posters
+         * was downloadable by anyone with the URL, and setting the object's ACL
+         * to private changed nothing. Separation is the only control there is.
+         *
+         * Empty means backups have nowhere safe to go, and the backup command
+         * refuses rather than falling back to the public one.
+         */
+        private readonly string $privateBucket,
         private readonly string $region,
         /**
          * Contabo's account tenant, the part of the S3 owner id before the `$`.
@@ -66,6 +79,47 @@ final class ObjectStorage
     public function bucket(): string
     {
         return $this->bucket;
+    }
+
+    public function privateBucket(): string
+    {
+        return $this->privateBucket;
+    }
+
+    public function hasPrivateBucket(): bool
+    {
+        return '' !== $this->privateBucket && $this->privateBucket !== $this->bucket;
+    }
+
+    /**
+     * Whether a bucket hands objects out without credentials.
+     *
+     * Asked before every backup, because the answer is not ours to control —
+     * it is a switch in Contabo's panel, and it being flipped is exactly the
+     * accident this checks for. Writes a probe, fetches it over plain HTTP with
+     * no authentication, removes it.
+     */
+    public function isPubliclyReadable(string $bucket): bool
+    {
+        $key = 'access-probe-'.bin2hex(random_bytes(6));
+
+        $this->client()->putObject(['Bucket' => $bucket, 'Key' => $key, 'Body' => 'probe']);
+
+        try {
+            $url = sprintf(
+                '%s/%s/%s',
+                $this->endpoint(),
+                '' !== $this->tenant ? $this->tenant.':'.$bucket : $bucket,
+                $key,
+            );
+
+            $context = stream_context_create(['http' => ['ignore_errors' => true, 'timeout' => 10]]);
+            $body = @file_get_contents($url, false, $context);
+
+            return 'probe' === $body;
+        } finally {
+            $this->client()->deleteObject(['Bucket' => $bucket, 'Key' => $key]);
+        }
     }
 
     public function endpoint(): string
@@ -164,10 +218,10 @@ final class ObjectStorage
      *
      * @throws MultipartUploadException when the parts still will not land
      */
-    public function putFile(string $key, string $path, string $contentType): string
+    public function putFile(string $key, string $path, string $contentType, ?string $bucket = null): string
     {
         $options = [
-            'bucket' => $this->bucket,
+            'bucket' => $bucket ?? $this->bucket,
             'key' => $key,
             // 16 MB: the floor is 5, and at Singapore's 186ms round trip the
             // per-part overhead is what costs, so fewer and larger wins.
@@ -206,14 +260,14 @@ final class ObjectStorage
      *
      * @return list<array{key: string, size: int, modified: ?\DateTimeImmutable}>
      */
-    public function listKeys(string $prefix): array
+    public function listKeys(string $prefix, ?string $bucket = null): array
     {
         $out = [];
         $token = null;
 
         do {
             $page = $this->client()->listObjectsV2(array_filter([
-                'Bucket' => $this->bucket,
+                'Bucket' => $bucket ?? $this->bucket,
                 'Prefix' => $prefix,
                 'ContinuationToken' => $token,
             ]));
@@ -274,9 +328,9 @@ final class ObjectStorage
         return $aborted;
     }
 
-    public function delete(string $key): void
+    public function delete(string $key, ?string $bucket = null): void
     {
-        $this->client()->deleteObject(['Bucket' => $this->bucket, 'Key' => $key]);
+        $this->client()->deleteObject(['Bucket' => $bucket ?? $this->bucket, 'Key' => $key]);
     }
 
     public function exists(string $key): bool

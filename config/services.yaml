@@ -80,6 +80,7 @@ services:
             $key: '%env(default:env_blank:CONTABO_S3_KEY)%'
             $secret: '%env(default:env_blank:CONTABO_S3_SECRET)%'
             $bucket: '%env(default:env_blank:CONTABO_S3_BUCKET)%'
+            $privateBucket: '%env(default:env_blank:CONTABO_S3_BACKUP_BUCKET)%'
             $region: '%env(default:contabo_region_default:CONTABO_S3_REGION)%'
             $tenant: '%env(default:env_blank:CONTABO_S3_TENANT)%'
             $publicBaseUrl: '%env(default:env_blank:CONTABO_S3_PUBLIC_URL)%'

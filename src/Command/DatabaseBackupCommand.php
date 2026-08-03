@@ -72,8 +72,44 @@ final class DatabaseBackupCommand extends Command
             return Command::FAILURE;
         }
 
+        /*
+         * A dump goes in its own bucket or it does not go at all.
+         *
+         * The artwork bucket is public — that is what a poster needs — and on
+         * Contabo that is a property of the bucket rather than the object. The
+         * first backup written there was downloadable by anyone who guessed the
+         * URL, and setting the object ACL to private changed nothing. There is
+         * no arrangement of one bucket that serves both, so the absence of a
+         * private one is a refusal rather than a fallback.
+         */
+        if (!$this->storage->hasPrivateBucket()) {
+            $io->error([
+                'No private bucket configured — refusing to write a database dump.',
+                'Create a second, non-public bucket in the Contabo panel and set',
+                'CONTABO_S3_BACKUP_BUCKET to its name. It must not be the artwork',
+                'bucket: that one is public, and a dump in it is world-readable.',
+            ]);
+
+            return Command::FAILURE;
+        }
+
         if ($input->getOption('list')) {
             return $this->list($io);
+        }
+
+        /*
+         * Asked every time rather than trusted once. Whether a bucket is public
+         * is a switch in somebody else's control panel, and it being flipped by
+         * accident is precisely the thing this is here to catch — the cost is
+         * one small object written and deleted.
+         */
+        if ($this->storage->isPubliclyReadable($this->storage->privateBucket())) {
+            $io->error(sprintf(
+                'Bucket "%s" serves objects without credentials. Refusing to upload a database dump to it.',
+                $this->storage->privateBucket(),
+            ));
+
+            return Command::FAILURE;
         }
 
         $keep = max(1, (int) $input->getOption('keep'));
@@ -112,7 +148,7 @@ final class DatabaseBackupCommand extends Command
             }
 
             $io->writeln(sprintf('  %s MB read, uploading %s …', number_format($bytes / 1048576, 1), $key));
-            $this->storage->putFile($key, $spool, 'application/octet-stream');
+            $this->storage->putFile($key, $spool, 'application/octet-stream', $this->storage->privateBucket());
         } catch (\Throwable $e) {
             $io->error('Upload failed: '.$e->getMessage());
 
@@ -121,7 +157,7 @@ final class DatabaseBackupCommand extends Command
             @unlink($spool);
         }
 
-        $stored = $this->storage->listKeys(self::PREFIX);
+        $stored = $this->storage->listKeys(self::PREFIX, $this->storage->privateBucket());
         $size = 0;
         foreach ($stored as $object) {
             if ($object['key'] === $key) {
@@ -149,14 +185,14 @@ final class DatabaseBackupCommand extends Command
         // Pruned only after a good upload, so a failed run never costs a copy.
         $pruned = 0;
         foreach (\array_slice($stored, $keep) as $old) {
-            $this->storage->delete($old['key']);
+            $this->storage->delete($old['key'], $this->storage->privateBucket());
             $io->writeln('  removed '.$old['key']);
             ++$pruned;
         }
 
         $io->success(sprintf(
             'Backed up to %s. %d kept, %d removed.',
-            $this->storage->bucket(),
+            $this->storage->privateBucket(),
             min(\count($stored), $keep),
             $pruned,
         ));
@@ -192,7 +228,7 @@ final class DatabaseBackupCommand extends Command
 
     private function list(SymfonyStyle $io): int
     {
-        $stored = $this->storage->listKeys(self::PREFIX);
+        $stored = $this->storage->listKeys(self::PREFIX, $this->storage->privateBucket());
 
         if ([] === $stored) {
             $io->warning('No backups stored.');

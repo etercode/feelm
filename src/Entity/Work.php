@@ -68,6 +68,21 @@ class Work
     private ?string $backdrop = null;
 
     /**
+     * Object keys for our own copies — "posters/w500/abc.jpg" — or null while a
+     * work has not been mirrored.
+     *
+     * A key, not a URL: which host serves it is a property of today's setup,
+     * and baking one into a million rows means an UPDATE across the table every
+     * time that changes. The two columns above keep TMDB's URL whatever happens
+     * here, so a lost object degrades to the original rather than to a gap.
+     */
+    #[ORM\Column(type: Types::TEXT, nullable: true)]
+    private ?string $posterMirror = null;
+
+    #[ORM\Column(type: Types::TEXT, nullable: true)]
+    private ?string $backdropMirror = null;
+
+    /**
      * YouTube trailer payload: { site, key }, or null.
      *
      * @var array{site?: string, key?: string}|null
@@ -299,6 +314,30 @@ class Work
     public function setBackdrop(?string $backdrop): static
     {
         $this->backdrop = $backdrop;
+
+        return $this;
+    }
+
+    public function getPosterMirror(): ?string
+    {
+        return $this->posterMirror;
+    }
+
+    public function setPosterMirror(?string $posterMirror): static
+    {
+        $this->posterMirror = $posterMirror;
+
+        return $this;
+    }
+
+    public function getBackdropMirror(): ?string
+    {
+        return $this->backdropMirror;
+    }
+
+    public function setBackdropMirror(?string $backdropMirror): static
+    {
+        $this->backdropMirror = $backdropMirror;
 
         return $this;
     }

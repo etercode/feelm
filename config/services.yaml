@@ -7,6 +7,10 @@
 # Put parameters here that don't need to change on each machine where the app is deployed
 # https://symfony.com/doc/current/best_practices.html#use-parameters-for-application-configuration
 parameters:
+    # `default::` resolves to null, which a string-typed constructor rejects.
+    # These give the env fallbacks an actual empty string to fall back to.
+    env_blank: ''
+    contabo_region_default: 'eu2'
     # Requests per ten seconds. 40 was TMDB's published ceiling until they
     # retired it in 2019 for a much higher per-second allowance; 300 is 30/s,
     # comfortably inside what they serve today and enough that the pace is set
@@ -68,3 +72,14 @@ services:
     App\Service\PublicUrlGenerator:
         arguments:
             $publicBaseUrl: '%env(PUBLIC_BASE_URL)%'
+
+    # Empty defaults so a checkout without a bucket still boots — ObjectStorage
+    # reports itself unconfigured and the site serves TMDB's URLs as before.
+    App\Service\Media\ObjectStorage:
+        arguments:
+            $key: '%env(default:env_blank:CONTABO_S3_KEY)%'
+            $secret: '%env(default:env_blank:CONTABO_S3_SECRET)%'
+            $bucket: '%env(default:env_blank:CONTABO_S3_BUCKET)%'
+            $region: '%env(default:contabo_region_default:CONTABO_S3_REGION)%'
+            $tenant: '%env(default:env_blank:CONTABO_S3_TENANT)%'
+            $publicBaseUrl: '%env(default:env_blank:CONTABO_S3_PUBLIC_URL)%'

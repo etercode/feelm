@@ -59,7 +59,7 @@ final class WorkPresenter
             'slug' => $work->getSlug(),
             'title' => $work->getTitle(),
             'year' => $work->getYear(),
-            'poster' => $this->urls->media($work->getPoster()),
+            'poster' => $this->urls->artwork($work->getPosterMirror(), $work->getPoster()),
             'externalScore' => $work->getExternalScore(),
             'ratings' => $this->ratings($work),
             // Only for the label when a title has no rating rows at all — the
@@ -132,7 +132,7 @@ final class WorkPresenter
             'slug' => $work->getSlug(),
             'title' => $work->getTitle(),
             'year' => $work->getYear(),
-            'poster' => $this->urls->media($work->getPoster()),
+            'poster' => $this->urls->artwork($work->getPosterMirror(), $work->getPoster()),
             'details' => $this->listDetails($work),
         ];
     }
@@ -152,8 +152,8 @@ final class WorkPresenter
             'tagline' => $work->getTagline(),
             'overview' => $work->getOverview(),
             'genres' => $work->getGenreNames(),
-            'poster' => $this->urls->media($work->getPoster()),
-            'backdrop' => $this->urls->media($work->getBackdrop()),
+            'poster' => $this->urls->artwork($work->getPosterMirror(), $work->getPoster()),
+            'backdrop' => $this->urls->artwork($work->getBackdropMirror(), $work->getBackdrop()),
             'externalScore' => $work->getExternalScore(),
             'ratings' => $this->ratings($work),
             'externalIds' => $this->externalIds($work),
@@ -192,8 +192,8 @@ final class WorkPresenter
             'title' => $work->getTitle(),
             'year' => $work->getYear(),
             'genres' => $work->getGenreNames(),
-            'poster' => $this->urls->media($work->getPoster()),
-            'backdrop' => $this->urls->media($work->getBackdrop()),
+            'poster' => $this->urls->artwork($work->getPosterMirror(), $work->getPoster()),
+            'backdrop' => $this->urls->artwork($work->getBackdropMirror(), $work->getBackdrop()),
             'externalScore' => $work->getExternalScore(),
             'ratings' => $this->ratings($work),
             'details' => array_filter([
@@ -235,7 +235,7 @@ final class WorkPresenter
             'slug' => $work->getSlug(),
             'title' => $work->getTitle(),
             'year' => $work->getYear(),
-            'poster' => $this->urls->media($work->getPoster()),
+            'poster' => $this->urls->artwork($work->getPosterMirror(), $work->getPoster()),
         ];
     }
 
@@ -279,7 +279,7 @@ final class WorkPresenter
             ...$this->adminRow($work),
             'tagline' => $work->getTagline(),
             'overview' => $work->getOverview(),
-            'backdrop' => $this->urls->media($work->getBackdrop()),
+            'backdrop' => $this->urls->artwork($work->getBackdropMirror(), $work->getBackdrop()),
             'posterPath' => $work->getPoster(),
             'backdropPath' => $work->getBackdrop(),
             'releaseDate' => $work->getReleaseDate()?->format('Y-m-d'),

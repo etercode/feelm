@@ -236,6 +236,44 @@ final class ObjectStorage
         return $out;
     }
 
+    /**
+     * Abandons multipart uploads that were started and never finished.
+     *
+     * A failed multipart leaves its parts on the server, counted against the
+     * quota and belonging to no object — invisible to a listing, so nothing
+     * else would ever notice them. The first database backup left 29 parts of
+     * one behind when Contabo shed the thirtieth.
+     *
+     * Age-guarded because an upload in flight right now is not stale, and this
+     * runs on a schedule alongside jobs that may be mid-upload.
+     *
+     * @return int how many were abandoned
+     */
+    public function abortStaleUploads(int $olderThanHours = 6): int
+    {
+        $cutoff = new \DateTimeImmutable(sprintf('-%d hours', max(1, $olderThanHours)));
+        $aborted = 0;
+
+        foreach ($this->client()->listMultipartUploads(['Bucket' => $this->bucket])['Uploads'] ?? [] as $upload) {
+            $started = isset($upload['Initiated'])
+                ? \DateTimeImmutable::createFromInterface($upload['Initiated'])
+                : null;
+
+            if (null !== $started && $started > $cutoff) {
+                continue;
+            }
+
+            $this->client()->abortMultipartUpload([
+                'Bucket' => $this->bucket,
+                'Key' => $upload['Key'],
+                'UploadId' => $upload['UploadId'],
+            ]);
+            ++$aborted;
+        }
+
+        return $aborted;
+    }
+
     public function delete(string $key): void
     {
         $this->client()->deleteObject(['Bucket' => $this->bucket, 'Key' => $key]);

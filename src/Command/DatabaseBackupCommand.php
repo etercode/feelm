@@ -135,6 +135,17 @@ final class DatabaseBackupCommand extends Command
             number_format(microtime(true) - $started, 1),
         ));
 
+        /*
+         * Parts left behind by an upload that died. They belong to no object,
+         * so nothing lists them, and they count against the quota until
+         * somebody says otherwise. Six hours old, so an upload happening right
+         * now is safe.
+         */
+        $abandoned = $this->storage->abortStaleUploads();
+        if ($abandoned > 0) {
+            $io->writeln(sprintf('  abandoned %d stale multipart upload(s)', $abandoned));
+        }
+
         // Pruned only after a good upload, so a failed run never costs a copy.
         $pruned = 0;
         foreach (\array_slice($stored, $keep) as $old) {

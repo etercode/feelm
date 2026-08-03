@@ -57,6 +57,14 @@ final class CrawlController extends AbstractController
     ];
 
     /**
+     * The artwork mirror, which is a crawl too — of images rather than titles,
+     * from TMDB's CDN into our bucket. It has no queue table of its own: the
+     * work still to do is "a row with a TMDB URL and no mirror key", so the
+     * works table is the queue.
+     */
+    private const IMAGES = 'images';
+
+    /**
      * The popularity above which a title is worth crawling at all.
      *
      * The export holds every id TMDB knows, and about a million of them are
@@ -89,7 +97,7 @@ final class CrawlController extends AbstractController
             function (ItemInterface $item) use ($type): array {
                 $item->expiresAfter(self::CACHE_SECONDS);
 
-                return $this->measure($type);
+                return self::IMAGES === $type ? $this->measureImages() : $this->measure($type);
             },
             /*
              * Beta 0 turns off early expiration. Its job is to stop a herd of
@@ -295,7 +303,49 @@ final class CrawlController extends AbstractController
     {
         $type = (string) $request->query->get('type', 'movie');
 
-        return isset(self::QUEUES[$type]) ? $type : 'movie';
+        return isset(self::QUEUES[$type]) || self::IMAGES === $type ? $type : 'movie';
+    }
+
+    /**
+     * How much of the catalogue's artwork we hold ourselves.
+     *
+     * Deliberately no rate and no "running" flag. Every other number here is
+     * derived from the data, and a mirrored row carries no timestamp saying
+     * when it was mirrored — adding one would be a column on a million rows to
+     * drive a progress bar. The page polls every ten seconds and already knows
+     * what the last poll said, so it can subtract two counts itself; that is
+     * where the rate is computed, and it costs nothing.
+     *
+     * @return array<string, mixed>
+     */
+    private function measureImages(): array
+    {
+        $counts = $this->connection->executeQuery(
+            "SELECT
+                COUNT(*) FILTER (WHERE poster LIKE 'http%')          AS posters,
+                COUNT(*) FILTER (WHERE poster_mirror IS NOT NULL)    AS posters_done,
+                COUNT(*) FILTER (WHERE backdrop LIKE 'http%')        AS backdrops,
+                COUNT(*) FILTER (WHERE backdrop_mirror IS NOT NULL)  AS backdrops_done
+             FROM works WHERE deleted_at IS NULL",
+        )->fetchAssociative() ?: [];
+
+        $posters = (int) ($counts['posters'] ?? 0);
+        $backdrops = (int) ($counts['backdrops'] ?? 0);
+        $postersDone = min((int) ($counts['posters_done'] ?? 0), $posters);
+        $backdropsDone = min((int) ($counts['backdrops_done'] ?? 0), $backdrops);
+
+        $total = $posters + $backdrops;
+        $done = $postersDone + $backdropsDone;
+
+        return [
+            'type' => self::IMAGES,
+            'total' => $total,
+            'crawled' => $done,
+            'remaining' => max($total - $done, 0),
+            'percent' => $total > 0 ? round($done / $total * 100, 2) : 0.0,
+            'posters' => ['done' => $postersDone, 'total' => $posters],
+            'backdrops' => ['done' => $backdropsDone, 'total' => $backdrops],
+        ];
     }
 
     private function isRunning(mixed $lastAdded): bool

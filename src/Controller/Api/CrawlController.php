@@ -36,6 +36,21 @@ final class CrawlController extends AbstractController
         'series' => 'tmdb_series_ids',
     ];
 
+    /**
+     * The popularity above which a title is worth crawling at all.
+     *
+     * The export holds every id TMDB knows, and about a million of them are
+     * shorts, industrial films and festival entries nobody will ever search
+     * for. The crawl is run with `--min-popularity=1` and stops when this tier
+     * is exhausted, so this is the denominator that describes the actual job —
+     * progress against the whole export climbs to about two thirds and then
+     * stops, which looks like a stall and is not one.
+     *
+     * Same threshold as the partial full-text index, so search and the crawler
+     * page agree on which titles count.
+     */
+    private const NOTABLE_POPULARITY = 1.0;
+
     public function __construct(
         private readonly Connection $connection,
         private readonly WorkRepository $works,
@@ -54,8 +69,10 @@ final class CrawlController extends AbstractController
                 COUNT(*)                                        AS total,
                 COUNT(*) FILTER (WHERE crawled_at IS NOT NULL)  AS crawled,
                 COUNT(*) FILTER (WHERE crawled_at IS NULL)      AS remaining,
+                COUNT(*) FILTER (WHERE popularity >= :notable)  AS notable_total,
                 MAX(crawled_at)                                 AS last_crawled_at
              FROM {$queue}",
+            ['notable' => self::NOTABLE_POPULARITY],
         )->fetchAssociative() ?: [];
 
         $total = (int) ($counts['total'] ?? 0);
@@ -91,6 +108,7 @@ final class CrawlController extends AbstractController
             'running' => $this->isRunning($lastAdded),
             'lastAddedAt' => $this->atom($lastAdded),
             'lastCrawledAt' => $this->atom($counts['last_crawled_at'] ?? null),
+            'notable' => $this->notable($type, (int) ($counts['notable_total'] ?? 0), $perMinute),
         ];
 
         /*
@@ -159,6 +177,44 @@ final class CrawlController extends AbstractController
             'pages' => $pages,
             'limit' => $limit,
         ]);
+    }
+
+    /**
+     * Progress against the tier the crawl is actually working through.
+     *
+     * How many are held comes from `works` rather than the queue's `crawled_at`,
+     * which is stamped only when a whole run finishes: against a backlog of a
+     * million in batches of two thousand it reads 13,324 where the truth is
+     * 164,612. The queue is the list of what to do; the catalog is the record of
+     * what was done, and only one of them can be believed.
+     *
+     * @return array<string, int|float|null>
+     */
+    private function notable(string $type, int $total, float $perMinute): array
+    {
+        $held = (int) $this->connection->executeQuery(
+            'SELECT COUNT(*) FROM works
+             WHERE type = :type AND deleted_at IS NULL AND popularity >= :notable',
+            ['type' => $type, 'notable' => self::NOTABLE_POPULARITY],
+        )->fetchOne();
+
+        /*
+         * The catalog can hold more of this tier than the queue lists: a title
+         * crawled before today's export was published, or one whose popularity
+         * has risen past the line since. Clamping keeps the bar from reading
+         * over 100% and the remainder from going negative.
+         */
+        $held = min($held, $total);
+        $remaining = max($total - $held, 0);
+
+        return [
+            'floor' => self::NOTABLE_POPULARITY,
+            'total' => $total,
+            'crawled' => $held,
+            'remaining' => $remaining,
+            'percent' => $total > 0 ? round($held / $total * 100, 2) : 0.0,
+            'etaHours' => $perMinute > 0 ? round($remaining / $perMinute / 60, 1) : null,
+        ];
     }
 
     /**

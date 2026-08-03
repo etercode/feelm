@@ -10,6 +10,8 @@ use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Contracts\Cache\CacheInterface;
+use Symfony\Contracts\Cache\ItemInterface;
 
 /**
  * Read-only view of how the catalog crawl is getting on.
@@ -29,6 +31,17 @@ final class CrawlController extends AbstractController
 
     /** No recent arrivals for this long means nothing is running. */
     private const IDLE_MINUTES = 3;
+
+    /**
+     * How long a status answer is served from cache.
+     *
+     * Counting the catalog twice — once for the type, once for the popular tier
+     * — is two sequential scans of a 1.5 GB table, and the page polls every ten
+     * seconds from every tab anybody leaves open. Half a poll interval means at
+     * most one pass through the table per five seconds however many people are
+     * watching, and nothing on this page is worth being fresher than that.
+     */
+    private const CACHE_SECONDS = 5;
 
     /** Which queue table backs which type. */
     private const QUEUES = [
@@ -55,6 +68,7 @@ final class CrawlController extends AbstractController
         private readonly Connection $connection,
         private readonly WorkRepository $works,
         private readonly WorkPresenter $presenter,
+        private readonly CacheInterface $cache,
     ) {
     }
 
@@ -62,6 +76,22 @@ final class CrawlController extends AbstractController
     public function status(Request $request): JsonResponse
     {
         $type = $this->type($request);
+
+        return $this->json($this->cache->get(
+            'crawl.status.'.$type,
+            function (ItemInterface $item) use ($type): array {
+                $item->expiresAfter(self::CACHE_SECONDS);
+
+                return $this->measure($type);
+            },
+        ));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function measure(string $type): array
+    {
         $queue = self::QUEUES[$type];
 
         $counts = $this->connection->executeQuery(
@@ -76,7 +106,17 @@ final class CrawlController extends AbstractController
         )->fetchAssociative() ?: [];
 
         $total = (int) ($counts['total'] ?? 0);
-        $crawled = (int) ($counts['crawled'] ?? 0);
+        $inCatalog = $this->works->countByType($type);
+
+        /*
+         * `crawled_at` is stamped when a whole run finishes, and the runs are
+         * batches of two thousand against a backlog of a million — it reads
+         * 15,324 where the catalog holds 742,000. The catalog is the record of
+         * what was actually done, so it wins; the column is still reported as
+         * itself for anything that wants it, and clamped to the queue because
+         * the catalog can hold titles today's export no longer lists.
+         */
+        $crawled = min(max((int) ($counts['crawled'] ?? 0), $inCatalog), $total);
 
         // Rate from what actually landed, rather than from anything the command
         // reports — this stays true whether or not a crawl is running.
@@ -97,14 +137,14 @@ final class CrawlController extends AbstractController
             'type' => $type,
             'total' => $total,
             'crawled' => $crawled,
-            'remaining' => (int) ($counts['remaining'] ?? 0),
+            'remaining' => max($total - $crawled, 0),
             'percent' => $total > 0 ? round($crawled / $total * 100, 2) : 0.0,
-            'inCatalog' => $this->works->countByType($type),
+            'inCatalog' => $inCatalog,
             'perMinute' => round($perMinute, 1),
             'perSecond' => round($perMinute / 60, 2),
             // Null rather than infinity when nothing is moving: the frontend
             // shows "—" instead of a number that would be a guess.
-            'etaHours' => $perMinute > 0 ? round(($total - $crawled) / $perMinute / 60, 1) : null,
+            'etaHours' => $perMinute > 0 ? round(max($total - $crawled, 0) / $perMinute / 60, 1) : null,
             'running' => $this->isRunning($lastAdded),
             'lastAddedAt' => $this->atom($lastAdded),
             'lastCrawledAt' => $this->atom($counts['last_crawled_at'] ?? null),
@@ -125,7 +165,7 @@ final class CrawlController extends AbstractController
             $payload['filteredTotal'] = array_sum($payload['filtered']);
         }
 
-        return $this->json($payload);
+        return $payload;
     }
 
     /**

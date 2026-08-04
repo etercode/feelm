@@ -44,7 +44,7 @@ final class HomeController extends AbstractController
     public function index(Request $request): JsonResponse
     {
         $rail = min(self::MAX_RAIL, max(1, $request->query->getInt('rail', self::RAIL)));
-        $upcomingLimit = min(40, max(1, $request->query->getInt('upcoming', 20)));
+        $upcomingLimit = min(60, max(1, $request->query->getInt('upcoming', 40)));
 
         $rails = [];
         foreach (Work::TYPES as $type) {

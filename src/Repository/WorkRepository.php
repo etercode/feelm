@@ -5,6 +5,7 @@ namespace App\Repository;
 use App\Entity\ExternalId;
 use App\Entity\Work;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
+use Doctrine\DBAL\ParameterType;
 use Doctrine\Persistence\ManagerRegistry;
 
 /**
@@ -164,25 +165,45 @@ class WorkRepository extends ServiceEntityRepository
      *
      * @return list<Work>
      */
-    public function findUpcoming(int $limit = 20, int $withinDays = 365): array
+    public function findUpcoming(int $limit = 40, int $withinDays = 365, int $pool = 200): array
     {
-        $ids = $this->createQueryBuilder('w')
-            ->select('w.id')
-            ->andWhere('w.deletedAt IS NULL')
-            ->andWhere('w.poster IS NOT NULL')
-            ->andWhere('w.releaseDate > CURRENT_DATE()')
-            /*
-             * A horizon, because TMDB carries placeholders years out — sequels
-             * with a year and nothing else — and those are popular enough on
-             * announcement alone to crowd out everything releasing this month.
-             */
-            ->andWhere('w.releaseDate <= :until')
-            ->setParameter('until', (new \DateTimeImmutable())->modify(sprintf('+%d days', max(1, $withinDays))))
-            ->orderBy('w.popularity', 'DESC')
-            ->addOrderBy('w.id', 'ASC')
-            ->setMaxResults($limit)
-            ->getQuery()
-            ->getSingleColumnResult();
+        /*
+         * Drawn at random from the most popular candidates rather than taken
+         * straight off the top.
+         *
+         * Strictly by popularity the queue was the same titles every day —
+         * three quarters of what is coming never appeared at all, and the
+         * plate opened on one of a fixed handful. Purely at random it would be
+         * whatever the crawler happened to hold, most of which nobody has
+         * heard of. Popularity picks the pool; chance picks the queue.
+         *
+         * Raw SQL because DQL has no random(), and the pool has to be taken
+         * before the shuffle — ordering 744 rows randomly and keeping 40 is a
+         * different thing from keeping the best 200 and shuffling those.
+         */
+        $ids = $this->getEntityManager()->getConnection()->executeQuery(
+            'SELECT id FROM (
+                SELECT id FROM works
+                WHERE deleted_at IS NULL
+                  AND poster IS NOT NULL
+                  AND release_date > CURRENT_DATE
+                  -- A horizon, because TMDB carries placeholders years out —
+                  -- sequels with a year and nothing else — and those are
+                  -- popular on announcement alone and would crowd out
+                  -- everything actually releasing this month.
+                  AND release_date <= :until
+                ORDER BY popularity DESC NULLS LAST, id ASC
+                LIMIT :pool
+             ) candidates
+             ORDER BY random()
+             LIMIT :limit',
+            [
+                'until' => (new \DateTimeImmutable())->modify(sprintf('+%d days', max(1, $withinDays)))->format('Y-m-d'),
+                'pool' => max($limit, $pool),
+                'limit' => $limit,
+            ],
+            ['pool' => ParameterType::INTEGER, 'limit' => ParameterType::INTEGER],
+        )->fetchFirstColumn();
 
         if ([] === $ids) {
             return [];

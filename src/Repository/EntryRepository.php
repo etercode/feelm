@@ -6,6 +6,7 @@ use App\Entity\Entry;
 use App\Entity\User;
 use App\Entity\Work;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
+use Doctrine\DBAL\Connection;
 use Doctrine\ORM\Query\Expr\Join;
 use Doctrine\ORM\QueryBuilder;
 use Doctrine\Persistence\ManagerRegistry;
@@ -125,6 +126,227 @@ class EntryRepository extends ServiceEntityRepository
             'finished' => $finished,
             'averageRating' => 0 === $ratingCount ? null : round($ratingSum / $ratingCount, 1),
             'byType' => $byType,
+        ];
+    }
+
+    /**
+     * Fun facts about a shelf: how much time is on it, and its extremes.
+     *
+     * ---- why there is no chart over time -----------------------------------
+     *
+     * There was one, and it was wrong. It grouped finished titles by
+     * `updated_at` and called them months of watching — but somebody who joins
+     * today and adds the three thousand films they have seen over twenty years
+     * logs all three thousand today. The dates in this table say when a row was
+     * written, not when a film was watched, and nothing in the schema knows the
+     * difference. A chart built on that reports how somebody used the app,
+     * dressed up as how they spend their life.
+     *
+     * Totals do not have that problem. "Nine years of screen time" is true
+     * whether it was logged over a decade or in one sitting.
+     *
+     * ---- how series time is worked out -------------------------------------
+     *
+     * A film carries its own runtime. A series does not: it has an episode
+     * count from the source and a table of episodes that the crawler fills in
+     * over time, so the episode rows are a sample rather than the whole show —
+     * 73,000 rows against an authoritative 160,000 for this shelf.
+     *
+     * So the count comes from the source and the length from the sample: each
+     * show's own episodes, averaged, times how many episodes it actually has.
+     * An episode of a show is the length of that show's other episodes, which
+     * makes this an estimate but not a guess. Shows with no runtime anywhere
+     * contribute nothing and are counted in `seriesUnknown`, so the caller can
+     * say the total is a floor rather than implying it is exact.
+     *
+     * @return array{
+     *     filmMinutes: int, filmCount: int,
+     *     seriesMinutes: int, seriesCount: int, episodes: int, seriesUnknown: int,
+     *     longest: array{title: string, slug: string, type: string, minutes: int}|null,
+     *     oldest: array{title: string, slug: string, type: string, year: int}|null,
+     *     decade: array{decade: int, count: int}|null
+     * }
+     */
+    public function highlightsForUser(User $user): array
+    {
+        $connection = $this->getEntityManager()->getConnection();
+        $id = $user->getId();
+
+        $films = $connection->executeQuery(
+            <<<'SQL'
+                SELECT COUNT(*) AS n, COALESCE(SUM(w.runtime_minutes), 0) AS minutes
+                FROM entries e
+                JOIN works w ON w.id = e.work_id
+                WHERE e.user_id = :user AND e.status = 'done'
+                  AND w.type = 'movie' AND w.deleted_at IS NULL
+                SQL,
+            ['user' => $id],
+        )->fetchAssociative() ?: [];
+
+        $series = $connection->executeQuery(
+            <<<'SQL'
+                WITH shows AS (
+                    SELECT w.id,
+                           NULLIF(w.extra ->> 'episodeCount', '')::int   AS episodes,
+                           AVG(ep.runtime)                               AS sampled,
+                           NULLIF(w.extra ->> 'episodeRuntime', '')::int AS declared
+                    FROM entries e
+                    JOIN works w ON w.id = e.work_id
+                    LEFT JOIN seasons s ON s.work_id = w.id
+                    LEFT JOIN episodes ep ON ep.season_id = s.id
+                    WHERE e.user_id = :user AND e.status = 'done'
+                      AND w.type = 'series' AND w.deleted_at IS NULL
+                    GROUP BY w.id
+                )
+                SELECT COUNT(*) AS n,
+                       COALESCE(SUM(episodes), 0) AS episodes,
+                       COALESCE(SUM(episodes * COALESCE(sampled, declared)), 0) AS minutes,
+                       COUNT(*) FILTER (WHERE COALESCE(sampled, declared) IS NULL) AS unknown
+                FROM shows
+                SQL,
+            ['user' => $id],
+        )->fetchAssociative() ?: [];
+
+        return [
+            'filmMinutes' => (int) ($films['minutes'] ?? 0),
+            'filmCount' => (int) ($films['n'] ?? 0),
+            'seriesMinutes' => (int) round((float) ($series['minutes'] ?? 0)),
+            'seriesCount' => (int) ($series['n'] ?? 0),
+            'episodes' => (int) ($series['episodes'] ?? 0),
+            'seriesUnknown' => (int) ($series['unknown'] ?? 0),
+            'longest' => $this->record($connection, $id, 'longest'),
+            'oldest' => $this->record($connection, $id, 'oldest'),
+            'decade' => $this->decade($connection, $id),
+        ];
+    }
+
+    /**
+     * The longest thing somebody sat through, or the oldest thing they have
+     * seen. Two shapes of the same query, kept together so the join and the
+     * filters cannot drift apart.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function record(Connection $connection, int $userId, string $which): ?array
+    {
+        $order = 'longest' === $which ? 'w.runtime_minutes DESC' : 'w.year ASC';
+        $needs = 'longest' === $which
+            ? "w.type = 'movie' AND w.runtime_minutes > 0"
+            : 'w.year IS NOT NULL';
+
+        $row = $connection->executeQuery(
+            <<<SQL
+                SELECT w.title, w.slug, w.type, w.year, w.runtime_minutes
+                FROM entries e
+                JOIN works w ON w.id = e.work_id
+                WHERE e.user_id = :user AND e.status = 'done'
+                  AND w.deleted_at IS NULL AND {$needs}
+                ORDER BY {$order}, w.id ASC
+                LIMIT 1
+                SQL,
+            ['user' => $userId],
+        )->fetchAssociative();
+
+        if (false === $row) {
+            return null;
+        }
+
+        return [
+            'title' => (string) $row['title'],
+            'slug' => (string) $row['slug'],
+            'type' => (string) $row['type'],
+            'year' => null === $row['year'] ? null : (int) $row['year'],
+            'minutes' => null === $row['runtime_minutes'] ? null : (int) $row['runtime_minutes'],
+        ];
+    }
+
+    /** @return array{decade: int, count: int}|null */
+    private function decade(Connection $connection, int $userId): ?array
+    {
+        $row = $connection->executeQuery(
+            <<<'SQL'
+                SELECT (w.year / 10) * 10 AS decade, COUNT(*) AS n
+                FROM entries e
+                JOIN works w ON w.id = e.work_id
+                WHERE e.user_id = :user AND e.status = 'done'
+                  AND w.year IS NOT NULL AND w.deleted_at IS NULL
+                GROUP BY 1
+                ORDER BY n DESC, decade DESC
+                LIMIT 1
+                SQL,
+            ['user' => $userId],
+        )->fetchAssociative();
+
+        return false === $row ? null : ['decade' => (int) $row['decade'], 'count' => (int) $row['n']];
+    }
+
+    /**
+     * What somebody's scores look like, and what they actually spend time on.
+     *
+     * Two grouped queries rather than a page of entries. The histogram over
+     * three thousand finished titles is a count, and sending three thousand
+     * rows to the browser so it can count them there is exactly what splitting
+     * the shelf endpoint out was meant to stop.
+     *
+     * Genres are counted over finished titles only: a wishlist says what
+     * somebody means to watch, and this is a summary of what they did watch.
+     *
+     * @return array{ratings: array<string, int>, genres: list<array{name: string, count: int}>}
+     */
+    public function tasteForUser(User $user, int $genreLimit = 8): array
+    {
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $this->createQueryBuilder('e')
+            ->select('e.rating AS rating', 'COUNT(e.id) AS n')
+            ->innerJoin('e.work', 'w')
+            ->andWhere('e.user = :user')
+            ->andWhere('e.rating IS NOT NULL')
+            ->andWhere('w.deletedAt IS NULL')
+            ->setParameter('user', $user)
+            ->groupBy('e.rating')
+            ->getQuery()
+            ->getArrayResult();
+
+        // Every half-step present, including the ones nobody used. A histogram
+        // that omits its empty columns reads as "no data down here" rather than
+        // "this person never scores anything this low", which is the finding.
+        $ratings = [];
+        for ($step = 1; $step <= 10; ++$step) {
+            $ratings[number_format($step / 2, 1, '.', '')] = 0;
+        }
+
+        foreach ($rows as $row) {
+            $key = number_format((float) $row['rating'], 1, '.', '');
+            if (isset($ratings[$key])) {
+                $ratings[$key] = (int) $row['n'];
+            }
+        }
+
+        /** @var list<array<string, mixed>> $genreRows */
+        $genreRows = $this->createQueryBuilder('e')
+            ->select('g.name AS name', 'COUNT(e.id) AS n')
+            ->innerJoin('e.work', 'w')
+            ->innerJoin('w.genres', 'g')
+            ->andWhere('e.user = :user')
+            ->andWhere('e.status = :done')
+            ->andWhere('w.deletedAt IS NULL')
+            ->setParameter('user', $user)
+            ->setParameter('done', 'done')
+            ->groupBy('g.name')
+            ->orderBy('n', 'DESC')
+            // Alphabetical inside a tie, so the list does not reshuffle itself
+            // between two requests that counted the same.
+            ->addOrderBy('g.name', 'ASC')
+            ->setMaxResults($genreLimit)
+            ->getQuery()
+            ->getArrayResult();
+
+        return [
+            'ratings' => $ratings,
+            'genres' => array_map(
+                static fn (array $row) => ['name' => (string) $row['name'], 'count' => (int) $row['n']],
+                $genreRows,
+            ),
         ];
     }
 

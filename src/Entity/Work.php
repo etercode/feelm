@@ -119,20 +119,20 @@ class Work
     private ?array $episodesAir = null;
 
     /**
-     * ISO 3166-1 codes, e.g. ["US", "GB"].
+     * JustWatch data as TMDB sends it, keyed by country.
      *
-     * Codes rather than names, because a name is a translation and this is a
-     * fact — the browser turns "US" into "United States", "Amerika Birləşmiş
-     * Ştatları" or "США" with Intl.DisplayNames, which is one field here
-     * instead of one per language.
+     * Kept whole rather than trimmed to streaming: sampled across the catalog
+     * it averages 3 kB, not the 85 kB the blockbusters suggested, and keeping
+     * buy and rent means a detail page can answer "£3.49 on Apple TV" too.
      *
-     * A list rather than one value: co-productions are common and picking a
-     * winner would be inventing an answer TMDB does not give.
-     *
-     * @var list<string>|null
+     * @var array<string, mixed>|null
      */
     #[ORM\Column(type: Types::JSON, nullable: true, options: ['jsonb' => true])]
-    private ?array $countries = null;
+    private ?array $watchProviders = null;
+
+    /** When the detail backfill last filled this row in. Null means never. */
+    #[ORM\Column(type: Types::DATETIME_IMMUTABLE, nullable: true)]
+    private ?\DateTimeImmutable $detailsSyncedAt = null;
 
     /**
      * The preferred rating as a percentage, kept here because browse and search
@@ -664,16 +664,28 @@ class Work
         return $this;
     }
 
-    /** @return list<string>|null */
-    public function getCountries(): ?array
+    public function getDetailsSyncedAt(): ?\DateTimeImmutable
     {
-        return $this->countries;
+        return $this->detailsSyncedAt;
     }
 
-    /** @param list<string>|null $countries */
-    public function setCountries(?array $countries): static
+    public function setDetailsSyncedAt(?\DateTimeImmutable $at): static
     {
-        $this->countries = $countries ?: null;
+        $this->detailsSyncedAt = $at;
+
+        return $this;
+    }
+
+    /** @return array<string, mixed>|null */
+    public function getWatchProviders(): ?array
+    {
+        return $this->watchProviders;
+    }
+
+    /** @param array<string, mixed>|null $providers */
+    public function setWatchProviders(?array $providers): static
+    {
+        $this->watchProviders = $providers ?: null;
 
         return $this;
     }

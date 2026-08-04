@@ -180,7 +180,7 @@ class CatalogCrawlCommand extends Command
                         }
 
                         $detail = $this->tmdb->get('/movie/'.$tmdbId, [
-                            'append_to_response' => 'credits,videos,release_dates',
+                            'append_to_response' => 'credits,videos,release_dates,watch/providers,keywords,similar,recommendations',
                         ]);
                         --$budget;
                         if (null === $detail || empty($detail['title'])) {
@@ -204,7 +204,7 @@ class CatalogCrawlCommand extends Command
                         }
 
                         $detail = $this->tmdb->get('/tv/'.$tmdbId, [
-                            'append_to_response' => 'credits,videos,content_ratings,external_ids',
+                            'append_to_response' => 'credits,videos,content_ratings,external_ids,watch/providers,keywords,similar,recommendations',
                         ]);
                         --$budget;
                         if (null === $detail || empty($detail['name'])) {

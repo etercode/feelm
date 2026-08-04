@@ -28,7 +28,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
  * ---- resumable, because it is long ---------------------------------------
  *
  * 876,000 titles at the client's pace is hours. The cursor is the data itself:
- * every pass asks for works whose countries are still null, most popular first.
+ * every pass asks for works never synced, most popular first.
  * A run that dies, is killed, or hits a rate limit costs only the rows it was
  * holding — start it again and it picks up where the table left off.
  *
@@ -71,11 +71,11 @@ class CatalogBackfillDetailsCommand extends Command
         $connection = $this->entityManager->getConnection();
 
         $remaining = (int) $connection->executeQuery(
-            'SELECT COUNT(*) FROM works WHERE deleted_at IS NULL AND countries IS NULL',
+            'SELECT COUNT(*) FROM works WHERE deleted_at IS NULL AND details_synced_at IS NULL',
         )->fetchOne();
 
         $done = (int) $connection->executeQuery(
-            'SELECT COUNT(*) FROM works WHERE deleted_at IS NULL AND countries IS NOT NULL',
+            'SELECT COUNT(*) FROM works WHERE deleted_at IS NULL AND details_synced_at IS NOT NULL',
         )->fetchOne();
 
         $io->writeln(sprintf('%s done, %s to go', number_format($done), number_format($remaining)));
@@ -116,7 +116,7 @@ class CatalogBackfillDetailsCommand extends Command
                    ON e.work_id = w.id
                   AND e.source = CASE WHEN w.type = 'series' THEN 'tmdb_tv' ELSE 'tmdb' END
                  WHERE w.deleted_at IS NULL
-                   AND w.countries IS NULL
+                   AND w.details_synced_at IS NULL
                    AND COALESCE(w.popularity, 0) >= :pop"
                    .(null === $type ? '' : ' AND w.type = :type')."
                  ORDER BY w.popularity DESC NULLS LAST, w.id ASC
@@ -140,11 +140,13 @@ class CatalogBackfillDetailsCommand extends Command
                 foreach ($window as $row) {
                     $key = $row['type'].':'.$row['tmdb_id'];
                     $requests[$key] = [
-                        // No append_to_response: countries are on the base
-                        // document, and the credits this crawler usually asks
-                        // for would triple the payload for nothing.
                         'path' => ('series' === $row['type'] ? '/tv/' : '/movie/').$row['tmdb_id'],
-                        'query' => [],
+                        // Only the four this command is here for. Credits,
+                        // videos and release dates are already stored and would
+                        // double the response to re-send what we have.
+                        'query' => [
+                            'append_to_response' => 'watch/providers,keywords,similar,recommendations',
+                        ],
                     ];
                     $byTmdbId[$key] = $row['id'];
                 }
@@ -187,17 +189,17 @@ class CatalogBackfillDetailsCommand extends Command
                      */
                     $this->entityManager->getConnection()->executeStatement(
                         'UPDATE works SET
-                            countries = :codes,
+                            details_synced_at = NOW(),
                             budget = :budget,
                             revenue = :revenue,
                             homepage = :homepage,
                             spoken_languages = :languages,
+                            watch_providers = :providers,
                             in_production = :production,
                             next_episode_at = :nextAt,
                             episodes_air = :episodes
                          WHERE id = :id',
                         [
-                            'codes' => json_encode($codes),
                             'budget' => $extras['budget'],
                             'revenue' => $extras['revenue'],
                             'homepage' => null === $extras['homepage']
@@ -206,6 +208,9 @@ class CatalogBackfillDetailsCommand extends Command
                             'languages' => null === $extras['spokenLanguages']
                                 ? null
                                 : json_encode($extras['spokenLanguages']),
+                            'providers' => null === $extras['watchProviders']
+                                ? null
+                                : json_encode($extras['watchProviders']),
                             'production' => $extras['inProduction'],
                             'nextAt' => $extras['nextEpisodeAt'],
                             'episodes' => null === $extras['episodesAir']
@@ -215,6 +220,9 @@ class CatalogBackfillDetailsCommand extends Command
                         ],
                         ['production' => ParameterType::BOOLEAN],
                     );
+
+                    $this->writeTags($workId, $codes, $extras);
+                    $this->writeRelated($workId, $extras);
                 }
             }
 
@@ -237,6 +245,80 @@ class CatalogBackfillDetailsCommand extends Command
         ));
 
         return Command::SUCCESS;
+    }
+
+
+
+    /** country, keyword and studio share one table — see the migration. */
+    private const TAG_COUNTRY = 1;
+    private const TAG_KEYWORD = 2;
+    private const TAG_COMPANY = 3;
+
+    /**
+     * Replace this work's tags with what TMDB says now.
+     *
+     * Deleted first rather than merged: the answer arriving is the current one,
+     * and a studio or keyword that has been corrected upstream should not
+     * survive here because it was true once.
+     *
+     * @param list<string>         $countries
+     * @param array<string, mixed> $extras
+     */
+    private function writeTags(int $workId, array $countries, array $extras): void
+    {
+        $connection = $this->entityManager->getConnection();
+        $connection->executeStatement('DELETE FROM work_tag WHERE work_id = :id', ['id' => $workId]);
+
+        $groups = [
+            self::TAG_COUNTRY => $countries,
+            self::TAG_KEYWORD => $extras['keywords'] ?? [],
+            self::TAG_COMPANY => $extras['companies'] ?? [],
+        ];
+
+        foreach ($groups as $kind => $values) {
+            foreach ((array) $values as $value) {
+                $value = mb_substr(trim((string) $value), 0, 120);
+                if ('' === $value) {
+                    continue;
+                }
+
+                $connection->executeStatement(
+                    'INSERT INTO work_tag (work_id, kind, value) VALUES (:work, :kind, :value)
+                     ON CONFLICT (work_id, kind, value) DO NOTHING',
+                    ['work' => $workId, 'kind' => $kind, 'value' => $value],
+                );
+            }
+        }
+    }
+
+    /**
+     * What TMDB says is like this one.
+     *
+     * Replaced rather than merged: the second call is the current answer, and
+     * a row that has dropped out of TMDB's list should drop out of ours.
+     *
+     * TMDB ids, not ours. The title being pointed at may not be crawled yet,
+     * and an id keeps the pointer good for whenever it arrives — the read side
+     * resolves through external_ids and simply shows fewer.
+     *
+     * @param array<string, mixed> $extras
+     */
+    private function writeRelated(int $workId, array $extras): void
+    {
+        $connection = $this->entityManager->getConnection();
+
+        $connection->executeStatement('DELETE FROM work_related WHERE work_id = :id', ['id' => $workId]);
+
+        foreach (['similar' => $extras['similar'] ?? null, 'recommended' => $extras['recommended'] ?? null] as $kind => $ids) {
+            foreach ((array) $ids as $position => $tmdbId) {
+                $connection->executeStatement(
+                    'INSERT INTO work_related (work_id, kind, tmdb_id, position)
+                     VALUES (:work, :kind, :tmdb, :position)
+                     ON CONFLICT (work_id, kind, tmdb_id) DO NOTHING',
+                    ['work' => $workId, 'kind' => $kind, 'tmdb' => (int) $tmdbId, 'position' => $position],
+                );
+            }
+        }
     }
 
     /**

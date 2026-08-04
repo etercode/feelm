@@ -95,7 +95,6 @@ final class CatalogWorkPersister
             ->setVoteCount(isset($row['voteCount']) ? (int) $row['voteCount'] : null)
             ->setPopularity(isset($row['popularity']) ? (float) $row['popularity'] : null)
             ->setOriginalLanguage($this->str($row['originalLanguage'] ?? null, 8))
-            ->setCountries($row['countries'] ?? null)
             ->setBudget($row['extras']['budget'] ?? null)
             ->setRevenue($row['extras']['revenue'] ?? null)
             ->setHomepage($this->str($row['extras']['homepage'] ?? null, 500))
@@ -103,6 +102,7 @@ final class CatalogWorkPersister
             ->setInProduction($row['extras']['inProduction'] ?? null)
             ->setNextEpisodeAt($this->date($row['extras']['nextEpisodeAt'] ?? null))
             ->setEpisodesAir($row['extras']['episodesAir'] ?? null)
+            ->setWatchProviders($row['extras']['watchProviders'] ?? null)
             ->setSource($this->asObject($row['source'] ?? null));
 
         // Fields the mapper may put at the top level or leave inside details.

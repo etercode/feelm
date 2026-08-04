@@ -118,7 +118,7 @@ final class CatalogCrawlAllCommand extends Command
             foreach ($window as $tmdbId) {
                 $requests[$tmdbId] = [
                     'path' => '/movie/'.$tmdbId,
-                    'query' => ['append_to_response' => 'credits,videos,release_dates'],
+                    'query' => ['append_to_response' => 'credits,videos,release_dates,watch/providers,keywords,similar,recommendations'],
                 ];
             }
 

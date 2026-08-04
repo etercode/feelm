@@ -369,9 +369,77 @@ final class TmdbItemMapper
             'inProduction' => \array_key_exists('in_production', $detail)
                 ? (bool) $detail['in_production']
                 : null,
+            'companies' => $this->names($detail['production_companies'] ?? null, 'name'),
+            'keywords' => $this->names(
+                $detail['keywords']['keywords'] ?? $detail['keywords']['results'] ?? null,
+                'name',
+            ),
+            // Whole, not trimmed — see the note on Work::$watchProviders.
+            'watchProviders' => \is_array($detail['watch/providers']['results'] ?? null)
+                && [] !== $detail['watch/providers']['results']
+                    ? $detail['watch/providers']['results']
+                    : null,
+            'similar' => $this->tmdbIds($detail['similar']['results'] ?? null),
+            'recommended' => $this->tmdbIds($detail['recommendations']['results'] ?? null),
             'nextEpisodeAt' => $next['airDate'] ?? null,
             'episodesAir' => array_filter(['next' => $next, 'last' => $last]) ?: null,
         ];
+    }
+
+
+    /**
+     * The `name` off a list of {id, name} rows — studios, keywords.
+     *
+     * Names rather than ids: nothing here joins on them, they are drawn as
+     * chips and searched as text, and an id would need a second table to mean
+     * anything.
+     *
+     * @return list<string>|null
+     */
+    private function names(mixed $rows, string $key): ?array
+    {
+        if (!\is_array($rows)) {
+            return null;
+        }
+
+        $out = [];
+        foreach ($rows as $row) {
+            $value = \is_array($row) ? ($row[$key] ?? null) : null;
+            if (\is_string($value) && '' !== trim($value)) {
+                $out[] = trim($value);
+            }
+        }
+
+        return array_values(array_unique($out)) ?: null;
+    }
+
+    /**
+     * TMDB ids off a list of titles, capped.
+     *
+     * Twelve because that is more than any rail draws, and because this is
+     * written once per work into a table that would otherwise hold forty
+     * million rows to serve eight.
+     *
+     * @return list<int>|null
+     */
+    private function tmdbIds(mixed $rows, int $limit = 12): ?array
+    {
+        if (!\is_array($rows)) {
+            return null;
+        }
+
+        $ids = [];
+        foreach ($rows as $row) {
+            $id = \is_array($row) ? ($row['id'] ?? null) : null;
+            if (is_numeric($id)) {
+                $ids[] = (int) $id;
+            }
+            if (\count($ids) >= $limit) {
+                break;
+            }
+        }
+
+        return $ids ?: null;
     }
 
     private function nullableString(mixed $value): ?string

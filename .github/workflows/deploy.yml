@@ -42,3 +42,21 @@ jobs:
         run: |
           ssh -i ~/.ssh/id_ed25519 "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
             'cat > /tmp/feelm-deploy.sh && bash /tmp/feelm-deploy.sh' < deploy/remote.sh
+
+      # Runs whichever way the deploy went. The message is sent from the server
+      # rather than from here because the bot token lives in the database, and
+      # putting a second copy of it in GitHub secrets would mean two places to
+      # rotate it. `|| true` so a Telegram outage cannot turn a good deploy red.
+      - name: Tell Telegram
+        if: always()
+        run: |
+          ssh -i ~/.ssh/id_ed25519 "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" bash -s <<'REMOTE' || true
+          cd /opt/feelm || exit 0
+          docker compose --env-file .env.prod -f compose.yaml -f compose.prod.yaml \
+            exec -T --user www-data php php bin/console app:notify \
+            "Backend deploy ${{ job.status }}" \
+            $([ "${{ job.status }}" = success ] || echo --fail) \
+            --event=deploy \
+            --fact="Commit=${{ github.sha }}" \
+            --fact="By=${{ github.actor }}" </dev/null || true
+          REMOTE

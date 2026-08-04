@@ -31,6 +31,14 @@ COMPOSE=(docker compose --env-file .env.prod -f compose.yaml -f compose.prod.yam
 
 say() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >>"$LOG"; }
 
+# Telegram, if it is set up. Through the app because the token lives in the
+# database; never allowed to change this script's exit status, which is what a
+# monitoring cron reads.
+notify() {
+	"${COMPOSE[@]}" exec -T --user www-data php \
+		php bin/console app:notify "$@" --event=backup </dev/null >>"$LOG" 2>&1 || true
+}
+
 say "===== backup start"
 started=$SECONDS
 
@@ -43,12 +51,17 @@ status=("${PIPESTATUS[@]}")
 
 if [ "${status[0]}" -ne 0 ]; then
 	say "pg_dump FAILED (exit ${status[0]}) — nothing uploaded, nothing pruned"
+	notify "Backup failed" --fail \
+		--fact="Stage=pg_dump" --fact="Exit=${status[0]}" \
+		--fact="Note=nothing uploaded, nothing pruned"
 	exit 1
 fi
 
 if [ "${status[1]}" -ne 0 ]; then
 	say "upload FAILED (exit ${status[1]})"
+	notify "Backup failed" --fail --fact="Stage=upload" --fact="Exit=${status[1]}"
 	exit 1
 fi
 
 say "===== backup done in $((SECONDS - started))s"
+notify "Backup finished" --fact="Took=$((SECONDS - started))s" --fact="Kept=$KEEP"

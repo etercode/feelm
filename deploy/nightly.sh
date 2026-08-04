@@ -29,6 +29,16 @@ say() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >>"$LOG"
 }
 
+# Telegram, if it is configured. Goes through the app because the token lives
+# in the database where the admin can edit it, and this script has no database
+# credentials. Never allowed to fail the run: || true, and the command itself
+# always exits 0.
+FAILURES=""
+notify() {
+    $COMPOSE exec -T --user www-data php \
+        php bin/console app:notify "$@" --event=nightly </dev/null >>"$LOG" 2>&1 || true
+}
+
 # </dev/null on every exec: cron gives the job no stdin, and docker compose exec
 # without it can sit waiting on a terminal that will never arrive.
 run() {
@@ -42,7 +52,13 @@ run() {
     else
         # Carry on to the next job. A TMDB outage should not also cost us the
         # ratings import, which reads a different service entirely.
-        say "--- $label FAILED (exit $?) after $((SECONDS - started))s"
+        local code=$?
+        say "--- $label FAILED (exit $code) after $((SECONDS - started))s"
+        FAILURES="$FAILURES $label"
+        # Straight away rather than only in the summary: a job that dies at 02:05
+        # is worth knowing about before the run ends an hour later.
+        notify "Nightly: $label failed" --fail \
+            --fact="Job=$label" --fact="Exit=$code" --fact="After=$((SECONDS - started))s"
     fi
 }
 
@@ -70,3 +86,10 @@ run "popularity" php bin/console app:catalog:refresh-popularity
 run "imdb ratings" php -d memory_limit=1G bin/console app:catalog:imdb-ratings
 
 say "===== nightly end"
+
+if [ -n "$FAILURES" ]; then
+    notify "Nightly run finished with failures" --fail \
+        --fact="Failed=${FAILURES# }" --fact="Took=$((SECONDS / 60))m"
+else
+    notify "Nightly run finished" --fact="Jobs=5" --fact="Took=$((SECONDS / 60))m"
+fi

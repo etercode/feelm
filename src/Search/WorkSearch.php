@@ -243,7 +243,73 @@ final class WorkSearch
      */
     private function needsFuzzy(string $tsquery): bool
     {
-        return $this->fuzzy[$tsquery] ??= !(bool) $this->connection()->executeQuery(
+        return $this->fuzzy[$tsquery] ??= $this->fullTextFindsNothing($tsquery);
+    }
+
+    /**
+     * Whether full text can match anything, answered the cheap way first.
+     *
+     * Asking the GIN index directly is fine when the answer is yes: it finds a
+     * row and LIMIT 1 stops. It is terrible when the answer is no, and worst
+     * for the prefix term — proving that nothing starts with "vvbblargh" means
+     * walking that part of the index to exhaustion. Measured at 2.0s against
+     * 876k works, on every misspelling anybody types.
+     *
+     * search_terms is the vocabulary of the same corpus, one row per distinct
+     * word, with a btree on it. A word that is not in there cannot be in any
+     * work's search vector, and the query ANDs its terms — so one missing word
+     * settles it for the whole query, in about two milliseconds.
+     *
+     * Only when every word does exist somewhere does the real question — do
+     * they occur in the *same* work — get asked, and that is the case where the
+     * index has rows to find and answers quickly.
+     */
+    private function fullTextFindsNothing(string $tsquery): bool
+    {
+        foreach (explode(' & ', $tsquery) as $term) {
+            $prefix = str_ends_with($term, ':*');
+            $word = $prefix ? substr($term, 0, -2) : $term;
+
+            if ('' === $word) {
+                continue;
+            }
+
+            $known = (bool) $this->connection()->executeQuery(
+                $prefix
+                    ? 'SELECT 1 FROM search_terms WHERE term LIKE :word LIMIT 1'
+                    : 'SELECT 1 FROM search_terms WHERE term = :word LIMIT 1',
+                ['word' => $prefix ? $word.'%' : $word],
+            )->fetchOne();
+
+            if (!$known) {
+                return true;
+            }
+        }
+
+        /*
+         * One word, and the catalog knows it: something contains it, because
+         * search_terms is built from works. No point asking the index a
+         * question its own source has already answered.
+         *
+         * That matters more than it sounds. The probe below is a LIMIT 1 over
+         * a tsquery, and for a word held by one work in eight hundred thousand
+         * the planner reads the estimate (2,000 rows), decides a sequential
+         * scan will hit one almost immediately, and reads the whole table
+         * instead — 805,707 rows and 1.9 seconds to confirm a match it was
+         * always going to find. Every rare title did that.
+         *
+         * A stale vocabulary can only be wrong in the harmless direction: it
+         * would claim a match for a word whose last work was deleted since the
+         * index was built, and the search returns nothing instead of offering
+         * a fuzzy alternative until the next reindex.
+         */
+        if (!str_contains($tsquery, ' & ')) {
+            return false;
+        }
+
+        // Several words, each known but perhaps never together. Only the index
+        // can say, and here it has rows to find.
+        return !(bool) $this->connection()->executeQuery(
             "SELECT 1 FROM works w
              WHERE w.deleted_at IS NULL AND w.search_vector @@ to_tsquery('simple', :tsquery)
              LIMIT 1",

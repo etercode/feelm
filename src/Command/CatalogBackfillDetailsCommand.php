@@ -174,6 +174,30 @@ class CatalogBackfillDetailsCommand extends Command
 
                     if (null === $detail) {
                         ++$failed;
+
+                        /*
+                         * Stamped anyway, or this never finishes.
+                         *
+                         * These are titles TMDB has deleted — every one of a
+                         * sample of eight answered 404. Left unstamped they
+                         * stay null, and because the pass takes the most
+                         * popular unsynced rows first, the same dead ids come
+                         * back to the front of every pass. They were 0% of a
+                         * pass at the start, 8% an hour in and 17% an hour
+                         * after that: the artwork mirror's exact failure mode,
+                         * where a growing set of permanent failures is retried
+                         * forever and squeezes out real work.
+                         *
+                         * A transient failure gets stamped too, which is the
+                         * cost. That is what re-syncing on details_synced_at is
+                         * for — the same sweep that refreshes stale watch
+                         * providers will pick them up.
+                         */
+                        $this->entityManager->getConnection()->executeStatement(
+                            'UPDATE works SET details_synced_at = NOW() WHERE id = :id',
+                            ['id' => $workId],
+                        );
+
                         continue;
                     }
 

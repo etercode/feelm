@@ -33,12 +33,42 @@ class ShelfService
         }
 
         $entry = $this->entryRepository->findOneByUserAndWork($user, $work);
+
         if (null === $entry) {
-            $entry = (new Entry())
-                ->setUser($user)
-                ->setWork($work)
-                ->setStatus($data['status'] ?? 'wishlist');
-            $this->entityManager->persist($entry);
+            /*
+             * Claim the row in one statement rather than SELECT-then-INSERT.
+             *
+             * Two requests for the same title arriving together — a double
+             * click, or the client sending a status and a rating at once — both
+             * saw no row and both inserted one, and the second died on
+             * uniq_entry_user_work. Production reported it as
+             * UniqueConstraintViolationException.
+             *
+             * Catching the violation instead would mean recovering from a
+             * closed EntityManager, which is a much worse thing to have to get
+             * right. ON CONFLICT DO NOTHING makes the loser of the race a no-op
+             * and leaves both requests holding a row that exists; whichever
+             * lands second then updates it, which is what the caller asked for
+             * either way.
+             */
+            $this->entityManager->getConnection()->executeStatement(
+                'INSERT INTO entries (user_id, work_id, status, updated_at)
+                 VALUES (:user, :work, :status, NOW())
+                 ON CONFLICT (user_id, work_id) DO NOTHING',
+                [
+                    'user' => $user->getId(),
+                    'work' => $work->getId(),
+                    'status' => $data['status'] ?? 'wishlist',
+                ],
+            );
+
+            $entry = $this->entryRepository->findOneByUserAndWork($user, $work);
+        }
+
+        if (null === $entry) {
+            // The insert was a no-op and the row still is not there, which can
+            // only mean it was removed between the two statements.
+            throw new \InvalidArgumentException('entry_vanished');
         }
 
         if (isset($data['status'])) {

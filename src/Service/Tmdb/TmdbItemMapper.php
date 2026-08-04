@@ -80,6 +80,7 @@ final class TmdbItemMapper
             'originalTitle' => $this->nullableString($detail['original_title'] ?? null),
             'imdbId' => $this->imdbId($detail),
             'originalLanguage' => $this->nullableString($detail['original_language'] ?? null),
+            'countries' => $this->countries($detail),
             'voteCount' => isset($detail['vote_count']) ? (int) $detail['vote_count'] : null,
             'popularity' => isset($detail['popularity']) ? (float) $detail['popularity'] : null,
             
@@ -141,6 +142,7 @@ final class TmdbItemMapper
             'originalTitle' => $this->nullableString($detail['original_name'] ?? null),
             'imdbId' => $this->imdbId($detail),
             'originalLanguage' => $this->nullableString($detail['original_language'] ?? null),
+            'countries' => $this->countries($detail),
             'voteCount' => isset($detail['vote_count']) ? (int) $detail['vote_count'] : null,
             'popularity' => isset($detail['popularity']) ? (float) $detail['popularity'] : null,
             
@@ -263,6 +265,47 @@ final class TmdbItemMapper
         }
 
         return null;
+    }
+
+
+    /**
+     * ISO 3166-1 codes for a title, deduplicated and upper-cased.
+     *
+     * Two fields carry this and they disagree. `origin_country` is the newer
+     * one and is the only one TV has; `production_countries` is the older, is
+     * richer on films, and carries names we throw away. Both are read and
+     * merged, because a co-production listed one way on a film is listed the
+     * other way on the show it spun off.
+     *
+     * @param array<string, mixed> $detail
+     *
+     * @return list<string>|null
+     */
+    private function countries(array $detail): ?array
+    {
+        $codes = [];
+
+        foreach ((array) ($detail['origin_country'] ?? []) as $code) {
+            if (\is_string($code) && '' !== $code) {
+                $codes[] = strtoupper($code);
+            }
+        }
+
+        foreach ((array) ($detail['production_countries'] ?? []) as $row) {
+            $code = \is_array($row) ? ($row['iso_3166_1'] ?? null) : null;
+            if (\is_string($code) && '' !== $code) {
+                $codes[] = strtoupper($code);
+            }
+        }
+
+        // Two letters or nothing: TMDB is clean here, but this is written
+        // straight into a filter facet and a stray value would become a chip.
+        $codes = array_values(array_unique(array_filter(
+            $codes,
+            static fn (string $code) => 1 === preg_match('/^[A-Z]{2}$/', $code),
+        )));
+
+        return [] === $codes ? null : $codes;
     }
 
     private function nullableString(mixed $value): ?string

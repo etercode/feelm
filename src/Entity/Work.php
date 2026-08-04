@@ -91,6 +91,22 @@ class Work
     private ?array $trailer = null;
 
     /**
+     * ISO 3166-1 codes, e.g. ["US", "GB"].
+     *
+     * Codes rather than names, because a name is a translation and this is a
+     * fact — the browser turns "US" into "United States", "Amerika Birləşmiş
+     * Ştatları" or "США" with Intl.DisplayNames, which is one field here
+     * instead of one per language.
+     *
+     * A list rather than one value: co-productions are common and picking a
+     * winner would be inventing an answer TMDB does not give.
+     *
+     * @var list<string>|null
+     */
+    #[ORM\Column(type: Types::JSON, nullable: true, options: ['jsonb' => true])]
+    private ?array $countries = null;
+
+    /**
      * The preferred rating as a percentage, kept here because browse and search
      * sort by it and an indexed column beats a subquery per row. Derived from
      * work_ratings by a trigger — never written from PHP, or the two would
@@ -530,6 +546,20 @@ class Work
     {
         return null !== $this->releaseDate
             && $this->releaseDate > new \DateTimeImmutable('today');
+    }
+
+    /** @return list<string>|null */
+    public function getCountries(): ?array
+    {
+        return $this->countries;
+    }
+
+    /** @param list<string>|null $countries */
+    public function setCountries(?array $countries): static
+    {
+        $this->countries = $countries ?: null;
+
+        return $this;
     }
 
     /** @return Collection<int, Genre> */

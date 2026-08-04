@@ -95,6 +95,7 @@ final class CatalogWorkPersister
             ->setVoteCount(isset($row['voteCount']) ? (int) $row['voteCount'] : null)
             ->setPopularity(isset($row['popularity']) ? (float) $row['popularity'] : null)
             ->setOriginalLanguage($this->str($row['originalLanguage'] ?? null, 8))
+            ->setCountries($row['countries'] ?? null)
             ->setSource($this->asObject($row['source'] ?? null));
 
         // Fields the mapper may put at the top level or leave inside details.

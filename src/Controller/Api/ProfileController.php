@@ -70,7 +70,10 @@ class ProfileController extends AbstractController
             'stats' => $stats,
             'current' => array_map(static fn ($entry) => [
                 'entry' => EntryPresenter::one($entry),
-                'item' => $workPresenter->one($entry->getWork()),
+                // Cards again — the banner below is the one thing here that
+                // needs a full work, because it is the only thing drawing a
+                // backdrop.
+                'item' => $workPresenter->listItem($entry->getWork()),
             ], $current),
             'banner' => null === $banner ? null : $workPresenter->one($banner),
             'reviews' => array_map(

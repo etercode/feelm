@@ -67,7 +67,10 @@ class ShelfController extends AbstractController
         return $this->json([
             'items' => array_map(static fn ($entry) => [
                 'entry' => EntryPresenter::one($entry),
-                'item' => $workPresenter->one($entry->getWork()),
+                // A shelf draws poster cards. listItem is what a poster card
+                // needs; one() adds the overview, the cast and the trailer to
+                // every row of a sixty-row page.
+                'item' => $workPresenter->listItem($entry->getWork()),
             ], $result['items']),
             'total' => $result['total'],
             'page' => $page,

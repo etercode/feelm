@@ -107,6 +107,35 @@ class WorkController extends AbstractController
     }
 
     /**
+     * The little that a hover card needs, and nothing else.
+     *
+     * A poster in a grid carries a title, a year and a score — enough for the
+     * card, not enough for the panel that expands out of it, which wants a
+     * backdrop, a sentence and a trailer. The obvious answer is to ask
+     * /api/items/{type}/{slug}, and that is the wrong one: it returns every
+     * credit, and for a series every season and episode. Firing that because
+     * somebody's cursor paused over a poster would be megabytes and dozens of
+     * joins for a preview they may never look at twice.
+     *
+     * So: one row, four columns, no relations but genres.
+     */
+    #[Route('/api/items/{type}/{slug}/preview', name: 'api_items_preview', methods: ['GET'], requirements: ['type' => 'movie|series|game|book'])]
+    public function preview(string $type, string $slug): JsonResponse
+    {
+        $work = $this->requireWork($type, $slug);
+
+        return $this->json([
+            'id' => $work->getId(),
+            'backdrop' => $this->presenter->backdropUrl($work),
+            'overview' => $work->getOverview(),
+            'tagline' => $work->getTagline(),
+            'trailer' => $work->getTrailer(),
+            'genres' => array_slice($work->getGenreNames(), 0, 3),
+            'certification' => $work->getCertification(),
+        ]);
+    }
+
+    /**
      * More like this one.
      *
      * The browser used to do this: ask for 48 titles of the same type, 22 KB

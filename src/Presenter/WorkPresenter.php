@@ -34,6 +34,18 @@ final class WorkPresenter
     }
 
     /**
+     * The backdrop, resolved the same way a card's poster is.
+     *
+     * Exposed because the hover preview needs it without needing everything
+     * else `one()` would fetch, and because which of the two columns wins is
+     * this class's business rather than a controller's.
+     */
+    public function backdropUrl(Work $work): ?string
+    {
+        return $this->urls->artwork($work->getBackdropMirror(), $work->getBackdrop());
+    }
+
+    /**
      * One row of a listing — browse, search, a rail.
      *
      * Built from what a poster card actually draws, rather than from one() with

@@ -81,6 +81,7 @@ final class TmdbItemMapper
             'imdbId' => $this->imdbId($detail),
             'originalLanguage' => $this->nullableString($detail['original_language'] ?? null),
             'countries' => $this->countries($detail),
+            'extras' => $this->extras($detail),
             'voteCount' => isset($detail['vote_count']) ? (int) $detail['vote_count'] : null,
             'popularity' => isset($detail['popularity']) ? (float) $detail['popularity'] : null,
             
@@ -143,6 +144,7 @@ final class TmdbItemMapper
             'imdbId' => $this->imdbId($detail),
             'originalLanguage' => $this->nullableString($detail['original_language'] ?? null),
             'countries' => $this->countries($detail),
+            'extras' => $this->extras($detail),
             'voteCount' => isset($detail['vote_count']) ? (int) $detail['vote_count'] : null,
             'popularity' => isset($detail['popularity']) ? (float) $detail['popularity'] : null,
             
@@ -306,6 +308,70 @@ final class TmdbItemMapper
         )));
 
         return [] === $codes ? null : $codes;
+    }
+
+
+    /**
+     * The fields TMDB has always sent that nothing used to read.
+     *
+     * One method for both types because most of it is shared and the rest is
+     * simply absent — a film has no next episode and a series has no revenue,
+     * and null for a key the type does not have is the right answer either way.
+     *
+     * @param array<string, mixed> $detail
+     *
+     * @return array<string, mixed>
+     */
+    public function extrasFor(array $detail): array
+    {
+        return $this->extras($detail);
+    }
+
+    /**
+     * @param array<string, mixed> $detail
+     *
+     * @return array<string, mixed>
+     */
+    private function extras(array $detail): array
+    {
+        $episode = static function (mixed $row): ?array {
+            if (!\is_array($row)) {
+                return null;
+            }
+
+            return array_filter([
+                'season' => isset($row['season_number']) ? (int) $row['season_number'] : null,
+                'episode' => isset($row['episode_number']) ? (int) $row['episode_number'] : null,
+                'name' => \is_string($row['name'] ?? null) && '' !== $row['name'] ? $row['name'] : null,
+                'airDate' => \is_string($row['air_date'] ?? null) && '' !== $row['air_date'] ? $row['air_date'] : null,
+            ], static fn ($value) => null !== $value);
+        };
+
+        $next = $episode($detail['next_episode_to_air'] ?? null);
+        $last = $episode($detail['last_episode_to_air'] ?? null);
+
+        $languages = [];
+        foreach ((array) ($detail['spoken_languages'] ?? []) as $row) {
+            $code = \is_array($row) ? ($row['iso_639_1'] ?? null) : null;
+            if (\is_string($code) && '' !== $code) {
+                $languages[] = strtolower($code);
+            }
+        }
+
+        return [
+            // 0 means "unknown" to TMDB on both of these, not "free to make".
+            'budget' => ((int) ($detail['budget'] ?? 0)) ?: null,
+            'revenue' => ((int) ($detail['revenue'] ?? 0)) ?: null,
+            'homepage' => \is_string($detail['homepage'] ?? null) && '' !== $detail['homepage']
+                ? $detail['homepage']
+                : null,
+            'spokenLanguages' => array_values(array_unique($languages)) ?: null,
+            'inProduction' => \array_key_exists('in_production', $detail)
+                ? (bool) $detail['in_production']
+                : null,
+            'nextEpisodeAt' => $next['airDate'] ?? null,
+            'episodesAir' => array_filter(['next' => $next, 'last' => $last]) ?: null,
+        ];
     }
 
     private function nullableString(mixed $value): ?string

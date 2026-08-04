@@ -88,7 +88,7 @@ run "imdb ratings" php -d memory_limit=1G bin/console app:catalog:imdb-ratings
 # Anything still without a country — stragglers the one-off backfill missed and
 # any row whose fetch failed. Bounded so it cannot lengthen the night; once the
 # backfill has finished this finds nothing and costs one query.
-run "countries" php bin/console app:catalog:backfill-countries --limit=2000 --concurrency=20
+run "details" php bin/console app:catalog:backfill-details --limit=2000 --concurrency=20
 
 say "===== nightly end"
 

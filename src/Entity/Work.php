@@ -90,6 +90,34 @@ class Work
     #[ORM\Column(type: Types::JSON, nullable: true, options: ['jsonb' => true])]
     private ?array $trailer = null;
 
+    #[ORM\Column(type: Types::BIGINT, nullable: true)]
+    private ?string $budget = null;
+
+    #[ORM\Column(type: Types::BIGINT, nullable: true)]
+    private ?string $revenue = null;
+
+    #[ORM\Column(type: Types::TEXT, nullable: true)]
+    private ?string $homepage = null;
+
+    /** @var list<string>|null ISO 639-1 codes actually spoken, not just the original. */
+    #[ORM\Column(type: Types::JSON, nullable: true, options: ['jsonb' => true])]
+    private ?array $spokenLanguages = null;
+
+    /** Series only: whether it is still being made. */
+    #[ORM\Column(nullable: true)]
+    private ?bool $inProduction = null;
+
+    /**
+     * The air date of the next episode, on its own so a rail can sort by it.
+     * The episode itself is in $episodesAir; nothing queries inside that.
+     */
+    #[ORM\Column(type: Types::DATE_IMMUTABLE, nullable: true)]
+    private ?\DateTimeImmutable $nextEpisodeAt = null;
+
+    /** @var array{next?: array<string, mixed>|null, last?: array<string, mixed>|null}|null */
+    #[ORM\Column(type: Types::JSON, nullable: true, options: ['jsonb' => true])]
+    private ?array $episodesAir = null;
+
     /**
      * ISO 3166-1 codes, e.g. ["US", "GB"].
      *
@@ -546,6 +574,94 @@ class Work
     {
         return null !== $this->releaseDate
             && $this->releaseDate > new \DateTimeImmutable('today');
+    }
+
+    public function getBudget(): ?int
+    {
+        return null === $this->budget ? null : (int) $this->budget;
+    }
+
+    public function setBudget(?int $budget): static
+    {
+        $this->budget = null === $budget || $budget <= 0 ? null : (string) $budget;
+
+        return $this;
+    }
+
+    public function getRevenue(): ?int
+    {
+        return null === $this->revenue ? null : (int) $this->revenue;
+    }
+
+    public function setRevenue(?int $revenue): static
+    {
+        $this->revenue = null === $revenue || $revenue <= 0 ? null : (string) $revenue;
+
+        return $this;
+    }
+
+    public function getHomepage(): ?string
+    {
+        return $this->homepage;
+    }
+
+    public function setHomepage(?string $homepage): static
+    {
+        $this->homepage = '' === $homepage ? null : $homepage;
+
+        return $this;
+    }
+
+    /** @return list<string>|null */
+    public function getSpokenLanguages(): ?array
+    {
+        return $this->spokenLanguages;
+    }
+
+    /** @param list<string>|null $languages */
+    public function setSpokenLanguages(?array $languages): static
+    {
+        $this->spokenLanguages = $languages ?: null;
+
+        return $this;
+    }
+
+    public function isInProduction(): ?bool
+    {
+        return $this->inProduction;
+    }
+
+    public function setInProduction(?bool $inProduction): static
+    {
+        $this->inProduction = $inProduction;
+
+        return $this;
+    }
+
+    public function getNextEpisodeAt(): ?\DateTimeImmutable
+    {
+        return $this->nextEpisodeAt;
+    }
+
+    public function setNextEpisodeAt(?\DateTimeImmutable $at): static
+    {
+        $this->nextEpisodeAt = $at;
+
+        return $this;
+    }
+
+    /** @return array{next?: array<string, mixed>|null, last?: array<string, mixed>|null}|null */
+    public function getEpisodesAir(): ?array
+    {
+        return $this->episodesAir;
+    }
+
+    /** @param array{next?: array<string, mixed>|null, last?: array<string, mixed>|null}|null $episodes */
+    public function setEpisodesAir(?array $episodes): static
+    {
+        $this->episodesAir = $episodes ?: null;
+
+        return $this;
     }
 
     /** @return list<string>|null */

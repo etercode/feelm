@@ -3,8 +3,10 @@
 namespace App\Command;
 
 use App\Service\Tmdb\TmdbAuthException;
+use App\Service\Tmdb\TmdbItemMapper;
 use App\Service\Tmdb\TmdbClient;
 use App\Service\Tmdb\TmdbRateLimitedException;
+use Doctrine\DBAL\ParameterType;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
@@ -14,7 +16,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
 /**
- * Fills in `works.countries` for everything crawled before the column existed.
+ * Fills in the detail fields for everything crawled before they existed.
  *
  * ---- why this is its own command ---------------------------------------
  *
@@ -37,10 +39,10 @@ use Symfony\Component\Console\Style\SymfonyStyle;
  * next pass does not fetch it again forever.
  */
 #[AsCommand(
-    name: 'app:catalog:backfill-countries',
-    description: 'Fetch and store production countries for works that have none',
+    name: 'app:catalog:backfill-details',
+    description: 'Fetch the TMDB detail fields older rows were crawled without',
 )]
-class CatalogBackfillCountriesCommand extends Command
+class CatalogBackfillDetailsCommand extends Command
 {
     /** Rows per database round trip. Small enough to keep memory flat. */
     private const CHUNK = 200;
@@ -48,6 +50,7 @@ class CatalogBackfillCountriesCommand extends Command
     public function __construct(
         private readonly EntityManagerInterface $entityManager,
         private readonly TmdbClient $tmdb,
+        private readonly TmdbItemMapper $mapper,
     ) {
         parent::__construct();
     }
@@ -173,14 +176,44 @@ class CatalogBackfillCountriesCommand extends Command
                     }
 
                     $codes = $this->codesFrom($detail);
+                    $extras = $this->mapper->extrasFor($detail);
                     [] === $codes ? ++$blank : ++$found;
 
-                    // Written even when empty: null is what the next pass
-                    // selects on, so leaving it null would make every
-                    // countryless title a permanent re-fetch.
+                    /*
+                     * Every field in one statement. `countries` is what the
+                     * next pass selects on, so it is written even when empty —
+                     * left null, a title TMDB has no country for would be
+                     * re-fetched on every pass forever.
+                     */
                     $this->entityManager->getConnection()->executeStatement(
-                        'UPDATE works SET countries = :codes WHERE id = :id',
-                        ['codes' => json_encode($codes), 'id' => $workId],
+                        'UPDATE works SET
+                            countries = :codes,
+                            budget = :budget,
+                            revenue = :revenue,
+                            homepage = :homepage,
+                            spoken_languages = :languages,
+                            in_production = :production,
+                            next_episode_at = :nextAt,
+                            episodes_air = :episodes
+                         WHERE id = :id',
+                        [
+                            'codes' => json_encode($codes),
+                            'budget' => $extras['budget'],
+                            'revenue' => $extras['revenue'],
+                            'homepage' => null === $extras['homepage']
+                                ? null
+                                : mb_substr((string) $extras['homepage'], 0, 500),
+                            'languages' => null === $extras['spokenLanguages']
+                                ? null
+                                : json_encode($extras['spokenLanguages']),
+                            'production' => $extras['inProduction'],
+                            'nextAt' => $extras['nextEpisodeAt'],
+                            'episodes' => null === $extras['episodesAir']
+                                ? null
+                                : json_encode($extras['episodesAir']),
+                            'id' => $workId,
+                        ],
+                        ['production' => ParameterType::BOOLEAN],
                     );
                 }
             }

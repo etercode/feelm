@@ -275,6 +275,18 @@ class CatalogBackfillDetailsCommand extends Command
             self::TAG_COMPANY => $extras['companies'] ?? [],
         ];
 
+        /*
+         * One statement, not one per tag.
+         *
+         * A title carries about thirteen of these and twenty-four related
+         * rows, and writing them individually meant nearly forty round trips
+         * to serve a single HTTP fetch — the backfill ran at 3/s against a
+         * client that can fetch at twenty. Batched, it is three statements a
+         * title whatever the counts are.
+         */
+        $rows = [];
+        $params = [];
+
         foreach ($groups as $kind => $values) {
             foreach ((array) $values as $value) {
                 $value = mb_substr(trim((string) $value), 0, 120);
@@ -282,13 +294,23 @@ class CatalogBackfillDetailsCommand extends Command
                     continue;
                 }
 
-                $connection->executeStatement(
-                    'INSERT INTO work_tag (work_id, kind, value) VALUES (:work, :kind, :value)
-                     ON CONFLICT (work_id, kind, value) DO NOTHING',
-                    ['work' => $workId, 'kind' => $kind, 'value' => $value],
-                );
+                $i = \count($rows);
+                $rows[] = "(:w{$i}, :k{$i}, :v{$i})";
+                $params["w{$i}"] = $workId;
+                $params["k{$i}"] = $kind;
+                $params["v{$i}"] = $value;
             }
         }
+
+        if ([] === $rows) {
+            return;
+        }
+
+        $connection->executeStatement(
+            'INSERT INTO work_tag (work_id, kind, value) VALUES '.implode(', ', $rows)
+            .' ON CONFLICT (work_id, kind, value) DO NOTHING',
+            $params,
+        );
     }
 
     /**
@@ -309,16 +331,30 @@ class CatalogBackfillDetailsCommand extends Command
 
         $connection->executeStatement('DELETE FROM work_related WHERE work_id = :id', ['id' => $workId]);
 
+        $rows = [];
+        $params = [];
+
         foreach (['similar' => $extras['similar'] ?? null, 'recommended' => $extras['recommended'] ?? null] as $kind => $ids) {
             foreach ((array) $ids as $position => $tmdbId) {
-                $connection->executeStatement(
-                    'INSERT INTO work_related (work_id, kind, tmdb_id, position)
-                     VALUES (:work, :kind, :tmdb, :position)
-                     ON CONFLICT (work_id, kind, tmdb_id) DO NOTHING',
-                    ['work' => $workId, 'kind' => $kind, 'tmdb' => (int) $tmdbId, 'position' => $position],
-                );
+                $i = \count($rows);
+                $rows[] = "(:w{$i}, :k{$i}, :t{$i}, :p{$i})";
+                $params["w{$i}"] = $workId;
+                $params["k{$i}"] = $kind;
+                $params["t{$i}"] = (int) $tmdbId;
+                $params["p{$i}"] = $position;
             }
         }
+
+        if ([] === $rows) {
+            return;
+        }
+
+        // Same reason as the tags: one statement rather than twenty-four.
+        $connection->executeStatement(
+            'INSERT INTO work_related (work_id, kind, tmdb_id, position) VALUES '.implode(', ', $rows)
+            .' ON CONFLICT (work_id, kind, tmdb_id) DO NOTHING',
+            $params,
+        );
     }
 
     /**

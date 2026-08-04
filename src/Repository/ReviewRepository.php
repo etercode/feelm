@@ -26,6 +26,48 @@ class ReviewRepository extends ServiceEntityRepository
     }
 
     /**
+     * The reviews behind a page of activity, in one query.
+     *
+     * The feed asks "did this person write about this title" once per row, and
+     * forty rows meant forty round trips before anything could be rendered.
+     * Both id lists are already in hand by then, so this fetches the whole
+     * rectangle and the caller picks out the pairs it wanted — a few rows of
+     * overfetch against thirty-nine queries saved.
+     *
+     * Keyed "userId:workId" because a review is identified by the pair; the
+     * caller cannot index it any other way without doing this work again.
+     *
+     * @param list<int> $userIds
+     * @param list<int> $workIds
+     *
+     * @return array<string, Review>
+     */
+    public function mapForPairs(array $userIds, array $workIds): array
+    {
+        if ([] === $userIds || [] === $workIds) {
+            return [];
+        }
+
+        /** @var list<Review> $rows */
+        $rows = $this->createQueryBuilder('r')
+            ->innerJoin('r.user', 'u')->addSelect('u')
+            ->innerJoin('r.work', 'w')->addSelect('w')
+            ->andWhere('u.id IN (:users)')
+            ->andWhere('w.id IN (:works)')
+            ->setParameter('users', array_values(array_unique($userIds)))
+            ->setParameter('works', array_values(array_unique($workIds)))
+            ->getQuery()
+            ->getResult();
+
+        $map = [];
+        foreach ($rows as $review) {
+            $map[$review->getUser()?->getId().':'.$review->getWork()?->getId()] = $review;
+        }
+
+        return $map;
+    }
+
+    /**
      * Reviews of one title.
      *
      * No deleted_at check on the work: it arrives as a parameter, and the only

@@ -10,6 +10,7 @@ use App\Presenter\UserPresenter;
 use App\Repository\EntryRepository;
 use App\Repository\FollowRepository;
 use App\Repository\ReviewRepository;
+use App\Service\Catalog\WorkHydrator;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -30,6 +31,7 @@ class FeedController extends AbstractController
         FollowRepository $followRepository,
         ReviewRepository $reviewRepository,
         WorkPresenter $workPresenter,
+        WorkHydrator $hydrator,
     ): JsonResponse {
         $scope = $request->query->getString('scope', 'following');
         $limit = min(80, max(1, $request->query->getInt('limit', 40)));
@@ -57,21 +59,44 @@ class FeedController extends AbstractController
         $hasMore = \count($entries) > $limit;
         $entries = \array_slice($entries, 0, $limit);
 
-        $activity = [];
-
+        /*
+         * Everything below is arranged so that rendering a row costs no
+         * queries. This endpoint was the only listing in the API that skipped
+         * both of these steps, and it showed: forty rows meant forty review
+         * lookups plus a lazy walk into each work's genres, ratings and
+         * credits, all of it after the response had already been decided on.
+         */
+        $rows = [];
         foreach ($entries as $entry) {
             $work = $entry->getWork();
             $author = $entry->getUser();
-            if (null === $work || null === $author) {
-                continue;
+            if (null !== $work && null !== $author) {
+                $rows[] = ['entry' => $entry, 'work' => $work, 'author' => $author];
             }
+        }
 
-            $review = $reviewRepository->findOneByUserAndWork($author, $work);
+        $hydrator->preload(
+            array_map(static fn (array $row) => $row['work'], $rows),
+            [WorkHydrator::RATINGS],
+        );
+
+        $reviews = $reviewRepository->mapForPairs(
+            array_map(static fn (array $row) => (int) $row['author']->getId(), $rows),
+            array_map(static fn (array $row) => (int) $row['work']->getId(), $rows),
+        );
+
+        $activity = [];
+        foreach ($rows as $row) {
+            $review = $reviews[$row['author']->getId().':'.$row['work']->getId()] ?? null;
 
             $activity[] = [
-                'entry' => EntryPresenter::one($entry),
-                'user' => UserPresenter::compact($author),
-                'item' => $workPresenter->one($work),
+                'entry' => EntryPresenter::one($row['entry']),
+                'user' => UserPresenter::compact($row['author']),
+                // listItem, not one(): a feed row is a poster, a title and a
+                // status line. one() also carries the overview, the tagline,
+                // the backdrop, the trailer and the full credit list, which was
+                // 18KB a row for a card that draws none of it.
+                'item' => $workPresenter->listItem($row['work']),
                 'review' => null === $review ? null : ReviewPresenter::one($review),
             ];
         }

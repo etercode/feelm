@@ -40,6 +40,45 @@ class EntryRepository extends ServiceEntityRepository
     }
 
     /**
+     * Somebody's whole shelf as plain rows: what is on it and in what state,
+     * and nothing about the titles themselves.
+     *
+     * The browser keeps this so any poster anywhere can show whether it is on
+     * your shelf, which means it genuinely does have to be all of them — there
+     * is no page of it that would answer the question. What it does not need is
+     * the titles: every screen that draws one is given it by whatever endpoint
+     * filled that screen.
+     *
+     * Array hydration, and the work is joined but never selected. Building
+     * three thousand Entry objects each holding a fully hydrated Work is what
+     * exhausted 256MB on production; these are arrays of six scalars.
+     *
+     * @return list<array{id: int, itemId: int, status: string, rating: string|null, progress: array<string, mixed>|null, updatedAt: \DateTimeInterface}>
+     */
+    public function shelfStateForUser(User $user): array
+    {
+        /** @var list<array{id: int, itemId: int, status: string, rating: string|null, progress: array<string, mixed>|null, updatedAt: \DateTimeInterface}> $rows */
+        $rows = $this->createQueryBuilder('e')
+            ->select(
+                'e.id AS id',
+                'IDENTITY(e.work) AS itemId',
+                'e.status AS status',
+                'e.rating AS rating',
+                'e.progress AS progress',
+                'e.updatedAt AS updatedAt',
+            )
+            ->innerJoin('e.work', 'w')
+            ->andWhere('e.user = :user')
+            ->andWhere('w.deletedAt IS NULL')
+            ->setParameter('user', $user)
+            ->orderBy('e.updatedAt', 'DESC')
+            ->getQuery()
+            ->getArrayResult();
+
+        return $rows;
+    }
+
+    /**
      * @param list<int>|null $userIds
      *
      * @return list<Entry>

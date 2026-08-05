@@ -24,3 +24,6 @@
 
 # Downloaded TMDB artwork
 /public/media/
+
+# Feedback screenshots — user uploads, purged by app:feedback:purge
+/public/media/feedback/

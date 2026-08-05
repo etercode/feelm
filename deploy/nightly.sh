@@ -64,10 +64,24 @@ run() {
 
 say "===== nightly start"
 
-# New films and new series. --refresh-export re-downloads TMDB's id list, which
-# is the only way anything published today enters the queue at all.
-run "movies" php bin/console app:catalog:crawl-all --refresh-export --limit=2000
+# Films TMDB added or edited since yesterday — the whole daily job for movies.
+#
+# This used to be `crawl-all --limit=2000`, which was not a daily crawler at
+# all: it was the first crawl still running in instalments, taking 2,000 titles
+# a night off a backlog of 400k. It looked like activity and hid the fact that
+# nothing ever asked TMDB what had *changed* — a film we already held could have
+# its runtime corrected or its poster replaced and we would never find out.
+#
+# Two days, not one, so a night that fails does not leave a hole. The windows
+# overlap and persist() is an upsert, so seeing a title twice costs one request.
+#
+# --refresh-export re-downloads TMDB's id list. It is not this job's data, but
+# this is the last movie job in the run and refresh-popularity below reads it.
+run "movies" php bin/console app:catalog:sync-changes --refresh-export --days=2
 
+# New series. Its backlog is finished — a 2,000 ceiling returned 43 titles last
+# night — so this is already a new-titles-only job and stays as it is. Series
+# *edits* are the next command's business.
 run "series" php bin/console app:catalog:crawl-series --refresh-export --limit=2000 --since=1990
 
 # New episodes for series we already hold. Two days of changes rather than one,
@@ -96,5 +110,5 @@ if [ -n "$FAILURES" ]; then
     notify "Nightly run finished with failures" --fail \
         --fact="Failed=${FAILURES# }" --fact="Took=$((SECONDS / 60))m"
 else
-    notify "Nightly run finished" --fact="Jobs=5" --fact="Took=$((SECONDS / 60))m"
+    notify "Nightly run finished" --fact="Jobs=6" --fact="Took=$((SECONDS / 60))m"
 fi

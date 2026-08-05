@@ -307,9 +307,31 @@ final class CatalogWorkPersister
             return;
         }
 
-        foreach ($work->getCredits()->toArray() as $credit) {
-            $work->getCredits()->removeElement($credit);
-            $this->entityManager->remove($credit);
+        /*
+         * What is already on the row, keyed the same way the new credits are.
+         *
+         * This used to remove every credit here and rebuild them all below,
+         * which worked for as long as persist() only ever ran on new rows —
+         * there was nothing to remove. The first time it was asked to update a
+         * title it already held, every one of them failed:
+         *
+         *   duplicate key value violates "uniq_credit_work_person_role_character"
+         *
+         * Doctrine orders inserts before deletes within a flush, so the rebuilt
+         * credits hit the index while the originals were still there. Matching
+         * them up instead sidesteps the ordering entirely, and means a nightly
+         * sync leaves the credits of an unchanged title completely alone rather
+         * than deleting and reinserting a cast list every night.
+         *
+         * @var array<string, Credit> $existing
+         */
+        $existing = [];
+        foreach ($work->getCredits() as $credit) {
+            $person = $credit->getPerson();
+            if (null === $person) {
+                continue;
+            }
+            $existing[$credit->getRole().'|'.$person->getSlug().'|'.(string) $credit->getCharacterName()] = $credit;
         }
 
         // One query for everyone this title credits, instead of one per name.
@@ -344,6 +366,14 @@ final class CatalogWorkPersister
                 }
                 $taken[$key] = true;
 
+                // Already credited exactly this way: keep the row, take it off
+                // the list of ones to drop, and let the billing order move.
+                if (isset($existing[$key])) {
+                    $existing[$key]->setPosition($position++);
+                    unset($existing[$key]);
+                    continue;
+                }
+
                 $credit = (new Credit())
                     ->setPerson($person)
                     ->setRole(Credit::ROLE_CAST)
@@ -371,6 +401,12 @@ final class CatalogWorkPersister
                 }
                 $taken[$key] = true;
 
+                if (isset($existing[$key])) {
+                    $existing[$key]->setPosition($position++);
+                    unset($existing[$key]);
+                    continue;
+                }
+
                 $credit = (new Credit())
                     ->setPerson($person)
                     ->setRole($role)
@@ -378,6 +414,14 @@ final class CatalogWorkPersister
                 $this->entityManager->persist($credit);
                 $work->addCredit($credit);
             }
+        }
+
+        // Whatever TMDB no longer credits. Only these are deleted, and none of
+        // them shares a key with anything being inserted, so the index is safe
+        // whichever order Doctrine picks.
+        foreach ($existing as $credit) {
+            $work->getCredits()->removeElement($credit);
+            $this->entityManager->remove($credit);
         }
     }
 

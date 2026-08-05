@@ -43,20 +43,15 @@ final class TmdbChanges
     {
         $say = $log ?? static function (string $message): void {};
 
-        $days = max(1, min(self::MAX_DAYS, $days));
-        $end = new \DateTimeImmutable('today');
-        $start = $end->modify(sprintf('-%d days', $days));
-
-        $changed = $this->fetchChangedIds($start, $end, $say);
+        $changed = $this->changedIds('/tv/changes', $days, $say);
         if ([] === $changed) {
             return [];
         }
 
-        $ours = $this->weStore($changed);
+        $ours = $this->weStore(ExternalId::SOURCE_TMDB_TV, $changed);
         $say(sprintf(
-            '%s changed on TMDB since %s, %s of them ours.',
+            '%s changed on TMDB, %s of them ours.',
             number_format(\count($changed)),
-            $start->format('Y-m-d'),
             number_format(\count($ours)),
         ));
 
@@ -64,17 +59,51 @@ final class TmdbChanges
     }
 
     /**
+     * Every film TMDB touched in the window, ours and not.
+     *
+     * Deliberately unfiltered, unlike changedSeries() above. A brand-new record
+     * registers as a change on the day it is created — verified: the ids the
+     * feed returns that are absent from the daily export are consecutive and
+     * sit above the export's highest id, which is what a freshly minted row
+     * looks like. So "what changed" and "what is new" are the same question
+     * asked once, and narrowing to what we already hold would throw away every
+     * new release.
+     *
+     * @param callable(string): void|null $log
+     *
+     * @return list<int>
+     */
+    public function changedMovies(int $days, ?callable $log = null): array
+    {
+        return $this->changedIds('/movie/changes', $days, $log ?? static function (string $m): void {});
+    }
+
+    /**
      * @param callable(string): void $say
      *
      * @return list<int>
      */
-    private function fetchChangedIds(\DateTimeImmutable $start, \DateTimeImmutable $end, callable $say): array
+    private function changedIds(string $path, int $days, callable $say): array
+    {
+        $days = max(1, min(self::MAX_DAYS, $days));
+        $end = new \DateTimeImmutable('today');
+        $start = $end->modify(sprintf('-%d days', $days));
+
+        return $this->fetchChangedIds($path, $start, $end, $say);
+    }
+
+    /**
+     * @param callable(string): void $say
+     *
+     * @return list<int>
+     */
+    private function fetchChangedIds(string $path, \DateTimeImmutable $start, \DateTimeImmutable $end, callable $say): array
     {
         $ids = [];
         $page = 1;
 
         do {
-            $response = $this->tmdb->get('/tv/changes', [
+            $response = $this->tmdb->get($path, [
                 'start_date' => $start->format('Y-m-d'),
                 'end_date' => $end->format('Y-m-d'),
                 'page' => $page,
@@ -99,11 +128,17 @@ final class TmdbChanges
     }
 
     /**
+     * Which of these we already hold, for the given TMDB id space.
+     *
+     * Films and television are numbered separately, so the source has to be
+     * named rather than assumed — looking a film up in the series id space
+     * finds an unrelated programme.
+     *
      * @param list<int> $tmdbIds
      *
      * @return list<int>
      */
-    private function weStore(array $tmdbIds): array
+    public function weStore(string $source, array $tmdbIds): array
     {
         $ours = [];
 
@@ -113,7 +148,7 @@ final class TmdbChanges
             $rows = $this->connection->executeQuery(
                 'SELECT external_id FROM external_ids WHERE source = :source AND external_id IN (:ids)',
                 [
-                    'source' => ExternalId::SOURCE_TMDB_TV,
+                    'source' => $source,
                     'ids' => array_map('strval', $chunk),
                 ],
                 ['ids' => ArrayParameterType::STRING],

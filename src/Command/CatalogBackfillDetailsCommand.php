@@ -2,6 +2,7 @@
 
 namespace App\Command;
 
+use App\Service\Catalog\WorkDetailsWriter;
 use App\Service\Tmdb\TmdbAuthException;
 use App\Service\Tmdb\TmdbItemMapper;
 use App\Service\Tmdb\TmdbClient;
@@ -48,6 +49,7 @@ class CatalogBackfillDetailsCommand extends Command
     private const CHUNK = 200;
 
     public function __construct(
+        private readonly WorkDetailsWriter $details,
         private readonly EntityManagerInterface $entityManager,
         private readonly TmdbClient $tmdb,
         private readonly TmdbItemMapper $mapper,
@@ -274,9 +276,6 @@ class CatalogBackfillDetailsCommand extends Command
 
 
     /** country, keyword and studio share one table — see the migration. */
-    private const TAG_COUNTRY = 1;
-    private const TAG_KEYWORD = 2;
-    private const TAG_COMPANY = 3;
 
     /**
      * Replace this work's tags with what TMDB says now.
@@ -290,51 +289,7 @@ class CatalogBackfillDetailsCommand extends Command
      */
     private function writeTags(int $workId, array $countries, array $extras): void
     {
-        $connection = $this->entityManager->getConnection();
-        $connection->executeStatement('DELETE FROM work_tag WHERE work_id = :id', ['id' => $workId]);
-
-        $groups = [
-            self::TAG_COUNTRY => $countries,
-            self::TAG_KEYWORD => $extras['keywords'] ?? [],
-            self::TAG_COMPANY => $extras['companies'] ?? [],
-        ];
-
-        /*
-         * One statement, not one per tag.
-         *
-         * A title carries about thirteen of these and twenty-four related
-         * rows, and writing them individually meant nearly forty round trips
-         * to serve a single HTTP fetch — the backfill ran at 3/s against a
-         * client that can fetch at twenty. Batched, it is three statements a
-         * title whatever the counts are.
-         */
-        $rows = [];
-        $params = [];
-
-        foreach ($groups as $kind => $values) {
-            foreach ((array) $values as $value) {
-                $value = mb_substr(trim((string) $value), 0, 120);
-                if ('' === $value) {
-                    continue;
-                }
-
-                $i = \count($rows);
-                $rows[] = "(:w{$i}, :k{$i}, :v{$i})";
-                $params["w{$i}"] = $workId;
-                $params["k{$i}"] = $kind;
-                $params["v{$i}"] = $value;
-            }
-        }
-
-        if ([] === $rows) {
-            return;
-        }
-
-        $connection->executeStatement(
-            'INSERT INTO work_tag (work_id, kind, value) VALUES '.implode(', ', $rows)
-            .' ON CONFLICT (work_id, kind, value) DO NOTHING',
-            $params,
-        );
+        $this->details->tags($workId, $countries, $extras);
     }
 
     /**
@@ -351,34 +306,7 @@ class CatalogBackfillDetailsCommand extends Command
      */
     private function writeRelated(int $workId, array $extras): void
     {
-        $connection = $this->entityManager->getConnection();
-
-        $connection->executeStatement('DELETE FROM work_related WHERE work_id = :id', ['id' => $workId]);
-
-        $rows = [];
-        $params = [];
-
-        foreach (['similar' => $extras['similar'] ?? null, 'recommended' => $extras['recommended'] ?? null] as $kind => $ids) {
-            foreach ((array) $ids as $position => $tmdbId) {
-                $i = \count($rows);
-                $rows[] = "(:w{$i}, :k{$i}, :t{$i}, :p{$i})";
-                $params["w{$i}"] = $workId;
-                $params["k{$i}"] = $kind;
-                $params["t{$i}"] = (int) $tmdbId;
-                $params["p{$i}"] = $position;
-            }
-        }
-
-        if ([] === $rows) {
-            return;
-        }
-
-        // Same reason as the tags: one statement rather than twenty-four.
-        $connection->executeStatement(
-            'INSERT INTO work_related (work_id, kind, tmdb_id, position) VALUES '.implode(', ', $rows)
-            .' ON CONFLICT (work_id, kind, tmdb_id) DO NOTHING',
-            $params,
-        );
+        $this->details->related($workId, $extras);
     }
 
     /**

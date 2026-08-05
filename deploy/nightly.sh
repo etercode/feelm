@@ -95,14 +95,24 @@ run "episodes" php bin/console app:catalog:refresh-series --days=2 --budget=600
 # already have.
 run "popularity" php bin/console app:catalog:refresh-popularity
 
-# 1G because the importer holds every known IMDb id in memory to join against;
-# at 472k ids the default 256M dies about a quarter of the way in.
+# The importer holds every known IMDb id in memory to join the dataset against,
+# so its cost grows with the catalogue. It streams the ids now and fits in the
+# default 256M at 531k of them; 1G stays as headroom, since the ceiling is the
+# catalogue's size and not a fixed number.
 run "imdb ratings" php -d memory_limit=1G bin/console app:catalog:imdb-ratings
 
-# Anything still without a country — stragglers the one-off backfill missed and
-# any row whose fetch failed. Bounded so it cannot lengthen the night; once the
-# backfill has finished this finds nothing and costs one query.
+# Stragglers the one-off backfill missed and any row whose fetch failed. The
+# sync above now writes tags and similars itself, so on a normal night this
+# finds only what series and the backlog crawl added. Bounded either way.
 run "details" php bin/console app:catalog:backfill-details --limit=2000 --concurrency=20
+
+# Artwork for anything new. It selects on poster_mirror IS NULL, so titles the
+# sync added or re-posterised today are picked up without being told about.
+#
+# Bounded well above a normal day's churn (a few hundred) but nowhere near the
+# ~100k still outstanding from the original mirror run — that backlog wants one
+# supervised pass, not sixty nights of dribbling through it.
+run "artwork" php bin/console app:catalog:mirror-media --limit=3000 --posters-only
 
 say "===== nightly end"
 
@@ -110,5 +120,5 @@ if [ -n "$FAILURES" ]; then
     notify "Nightly run finished with failures" --fail \
         --fact="Failed=${FAILURES# }" --fact="Took=$((SECONDS / 60))m"
 else
-    notify "Nightly run finished" --fact="Jobs=6" --fact="Took=$((SECONDS / 60))m"
+    notify "Nightly run finished" --fact="Jobs=7" --fact="Took=$((SECONDS / 60))m"
 fi

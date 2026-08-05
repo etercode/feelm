@@ -5,6 +5,7 @@ namespace App\Command;
 use App\Entity\ExternalId;
 use App\Search\SearchTermsIndex;
 use App\Service\Catalog\CatalogWorkPersister;
+use App\Service\Catalog\WorkDetailsWriter;
 use App\Service\Tmdb\TmdbAuthException;
 use App\Service\Tmdb\TmdbChanges;
 use App\Service\Tmdb\TmdbClient;
@@ -75,6 +76,7 @@ final class CatalogSyncChangesCommand extends Command
         private readonly TmdbChanges $changes,
         private readonly TmdbItemMapper $mapper,
         private readonly CatalogWorkPersister $persister,
+        private readonly WorkDetailsWriter $details,
         private readonly SearchTermsIndex $searchTerms,
         private readonly \App\Service\Tmdb\TmdbIdExport $export,
         private readonly \Doctrine\DBAL\Connection $connection,
@@ -189,8 +191,29 @@ final class CatalogSyncChangesCommand extends Command
                  * rather than allowed to fail every title after it.
                  */
                 try {
-                    $this->persister->persist($this->mapper->mapMovie($detail, $slugs));
+                    $row = $this->mapper->mapMovie($detail, $slugs);
+                    $work = $this->persister->persist($row);
                     $this->persister->flush();
+
+                    /*
+                     * Tags and similars are not columns on the works row, so
+                     * persist() cannot store them and this has to say so
+                     * separately. Without it the sync wrote a fresh overview
+                     * and left the keywords, countries and studios at whatever
+                     * they were on the day the title was first crawled —
+                     * permanently, because the backfill that does write them
+                     * only ever looks at rows it has not already stamped.
+                     *
+                     * The payload is the same one persist() just used; these
+                     * fields were already in it and were being dropped.
+                     */
+                    $id = $work->getId();
+                    if (null !== $id) {
+                        $this->details->tags($id, $row['countries'] ?? [], $row['extras'] ?? []);
+                        $this->details->related($id, $row['extras'] ?? []);
+                        $this->details->stamp($id);
+                    }
+
                     ++$stored;
                 } catch (\Throwable $e) {
                     ++$failed;

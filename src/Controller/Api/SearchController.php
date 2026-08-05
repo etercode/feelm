@@ -118,7 +118,7 @@ class SearchController extends AbstractController
                 return $this->buildFilters();
             },
             // No early expiration: recomputing is the entire cost, and one
-            // reader is not a herd to protect against. See CrawlController.
+            // reader is not a herd to protect against.
             0.0,
         ));
     }

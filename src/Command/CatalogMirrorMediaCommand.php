@@ -149,11 +149,26 @@ final class CatalogMirrorMediaCommand extends Command
             // inside this loop would serialise a 400ms round trip per image.
             $objects = [];
             $owners = [];
+
+            /*
+             * Sources TMDB will never serve again — see forget() below.
+             *
+             * @var list<array{id: int, column: string}>
+             */
+            $dead = [];
+
             foreach ($wanted as $item) {
                 try {
                     $response = $item['response'];
                     if (200 !== $response->getStatusCode()) {
                         ++$failed;
+
+                        // 404 only. A timeout or a 5xx is worth trying again;
+                        // a file TMDB has stopped serving is not.
+                        if (404 === $response->getStatusCode()) {
+                            $dead[] = ['id' => $item['id'], 'column' => $item['column']];
+                        }
+
                         continue;
                     }
                     $body = $response->getContent();
@@ -215,6 +230,10 @@ final class CatalogMirrorMediaCommand extends Command
 
                 if ([] !== $updates) {
                     $this->record($updates);
+                }
+
+                if ([] !== $dead) {
+                    $this->forget($dead);
                 }
             }
 
@@ -321,6 +340,53 @@ final class CatalogMirrorMediaCommand extends Command
      *
      * @param array<int, array<string, string>> $updates
      */
+    /**
+     * Drop a source URL TMDB has stopped serving.
+     *
+     * ---- why this had to exist ---------------------------------------------
+     *
+     * The queue is "has a source URL and no mirror key", ordered by popularity.
+     * A 404 left both of those true, so the same rows came back at the *head*
+     * of every pass and were re-attempted for ever. It showed up as a failure
+     * count that converged rather than a rate that varied: 199, 502, 535, 540,
+     * 540, 540, 543 — a fixed set being retried, eating a quarter of every pass
+     * and guaranteeing the run could never report itself complete.
+     *
+     * Clearing the URL is the honest answer rather than a suppression flag. The
+     * file is genuinely gone: what we hold is a path TMDB replaced, and a card
+     * pointing at it renders a broken image today. With it null the card falls
+     * back to the placeholder, which is the truth.
+     *
+     * And it repairs itself. Artwork is the single most common TMDB edit — four
+     * in five of the daily changes are image uploads — so the next time that
+     * title is touched, the changes sync writes the new path and the nightly
+     * mirror stores it.
+     *
+     * @param list<array{id: int, column: string}> $dead
+     */
+    private function forget(array $dead): void
+    {
+        // imagesOf() keys its result by the *mirror* column, because that is
+        // what the caller is about to fill in. What has to be cleared is the
+        // source beside it.
+        foreach (['poster_mirror' => 'poster', 'backdrop_mirror' => 'backdrop'] as $from => $column) {
+            $ids = array_values(array_unique(array_map(
+                static fn (array $row) => $row['id'],
+                array_filter($dead, static fn (array $row) => $row['column'] === $from),
+            )));
+
+            if ([] === $ids) {
+                continue;
+            }
+
+            $this->connection->executeStatement(
+                sprintf('UPDATE works SET %s = NULL WHERE id IN (:ids)', $column),
+                ['ids' => $ids],
+                ['ids' => \Doctrine\DBAL\ArrayParameterType::INTEGER],
+            );
+        }
+    }
+
     private function record(array $updates): void
     {
         $rows = [];

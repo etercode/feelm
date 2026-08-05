@@ -13,17 +13,41 @@ doctrine:
         mapping_types:
             tsvector: string
 
-        # The tmdb_*_ids tables are crawl queues owned entirely by migrations —
-        # no entity, and partial indexes DBAL cannot describe. Hiding them from
-        # schema comparison keeps `doctrine:schema:validate` meaningful.
+        # Tables owned entirely by migrations: no entity class, written with
+        # raw DBAL because they hold millions of rows that entity hydration
+        # would make far slower, and carrying partial indexes DBAL cannot
+        # describe. Hiding them from schema comparison keeps
+        # `doctrine:schema:validate` meaningful.
         #
-        # schema_filter matches table names only, which is why the one index
-        # below could not be hidden the same way.
-        schema_filter: '~^(?!tmdb_(movie|series)_ids$).*~'
+        # This list is not cosmetic. Without it `doctrine:migrations:diff`
+        # reads them as strays and writes DROP TABLE for each one, directly
+        # above whatever you actually asked it to generate — which is how a
+        # routine "add two tables" migration came within one command of taking
+        # 14 million tag and related rows with it. Anything new that migrations
+        # own and entities do not has to be added here on the day it is created.
+        #
+        # schema_filter matches table names only, which is why the partial
+        # indexes on entity-owned tables cannot be hidden the same way. Those
+        # are covered by the note below.
+        schema_filter: '~^(?!(tmdb_(movie|series)_ids|work_tag|work_related|search_terms)$).*~'
 
-        # KNOWN DRIFT, and the only one: `doctrine:schema:validate` reports
+        # KNOWN DRIFT: `doctrine:schema:validate` reports a DROP INDEX for every
+        # partial index in the schema —
         #
-        #     DROP INDEX idx_work_search_popular;
+        #     idx_work_search_popular   idx_work_details_unsynced
+        #     idx_work_notable          idx_work_type_popularity
+        #     idx_work_poster_todo      idx_work_backdrop_todo
+        #     idx_work_next_episode     idx_feedback_image_purge
+        #
+        # None of it is drift. Each has a WHERE clause, and #[ORM\Index] has no
+        # way to say WHERE, so the entity cannot describe what the migration
+        # built. schema_filter cannot help either: it matches table names, and
+        # these sit on tables entities do own.
+        #
+        # The consequence to remember: a generated migration will always contain
+        # these drops, mixed in with whatever you asked for. Read every diff.
+        #
+        # idx_work_search_popular is the sharpest case —
         #
         # It is not drift. The index is created by Version20260803120000 and is
         # load-bearing for search — see WorkSearch::pooled(). It cannot be

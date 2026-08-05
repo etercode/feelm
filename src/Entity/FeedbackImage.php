@@ -17,7 +17,11 @@ use Doctrine\ORM\Mapping as ORM;
  */
 #[ORM\Entity]
 #[ORM\Table(name: 'feedback_image')]
-#[ORM\Index(name: 'idx_feedback_image_purge', columns: ['purged_at'])]
+// The purge index is partial — CREATE INDEX ... WHERE purged_at IS NULL —
+// which #[ORM\Index] cannot express, so the migration owns it alone. Declaring
+// a plain index of the same name here is what makes every later diff propose
+// dropping and recreating it.
+#[ORM\Index(name: 'idx_feedback_image_feedback', columns: ['feedback_id', 'position'])]
 class FeedbackImage
 {
     #[ORM\Id]

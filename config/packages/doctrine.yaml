@@ -13,23 +13,19 @@ doctrine:
         mapping_types:
             tsvector: string
 
-        # Tables owned entirely by migrations: no entity class, written with
-        # raw DBAL because they hold millions of rows that entity hydration
-        # would make far slower, and carrying partial indexes DBAL cannot
-        # describe. Hiding them from schema comparison keeps
-        # `doctrine:schema:validate` meaningful.
+        # No schema_filter, deliberately.
         #
-        # This list is not cosmetic. Without it `doctrine:migrations:diff`
-        # reads them as strays and writes DROP TABLE for each one, directly
-        # above whatever you actually asked it to generate — which is how a
-        # routine "add two tables" migration came within one command of taking
-        # 14 million tag and related rows with it. Anything new that migrations
-        # own and entities do not has to be added here on the day it is created.
+        # There was one, hiding the tables that migrations own and no entity
+        # described. It stopped `doctrine:migrations:diff` proposing to drop
+        # them — by telling Doctrine not to look, which also stopped
+        # `doctrine:schema:validate` checking them for anything real.
         #
-        # schema_filter matches table names only, which is why the partial
-        # indexes on entity-owned tables cannot be hidden the same way. Those
-        # are covered by the note below.
-        schema_filter: '~^(?!(tmdb_(movie|series)_ids|work_tag|work_related|search_terms)$).*~'
+        # The tables are mapped now instead: WorkTag, WorkRelated, SearchTerm
+        # and the two TmdbExportRow subclasses. Nothing hydrates any of them —
+        # every one is read and written in raw SQL, for speed — but a mapping is
+        # a description of the schema, and describing a table costs nothing at
+        # run time. Writing raw SQL against a table was never a reason to leave
+        # Doctrine ignorant that it exists.
 
         # KNOWN DRIFT: `doctrine:schema:validate` reports a DROP INDEX for every
         # partial index in the schema —

@@ -10,6 +10,7 @@ use App\Service\Tmdb\TmdbChanges;
 use App\Service\Tmdb\TmdbClient;
 use App\Service\Tmdb\TmdbItemMapper;
 use App\Service\Tmdb\TmdbRateLimitedException;
+use Doctrine\DBAL\Logging\DebugDataHolder;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -49,6 +50,16 @@ use Symfony\Component\Console\Style\SymfonyStyle;
  * through the side door, which is exactly what this command exists to stop.
  * `--include-backlog` is there for when the backlog is finished and the
  * distinction stops mattering.
+ *
+ * ---- running this in dev ----------------------------------------------------
+ *
+ * Use APP_DEBUG=0. A few thousand titles asked for with append_to_response is a
+ * couple of hundred kilobytes each, and the profiler keeps every response body:
+ * the run dies inside the http-client at around 800 titles on 256M, and still
+ * dies at 4,600 on 1G, because the growth is linear and no ceiling fixes it.
+ * Resetting the traced client per window does not help either — what is
+ * injected is a decorator around it. With the profiler off the same run holds
+ * flat and finishes. Nothing to do for production, which runs with debug off.
  */
 #[AsCommand(
     name: 'app:catalog:sync-changes',
@@ -67,6 +78,8 @@ final class CatalogSyncChangesCommand extends Command
         private readonly SearchTermsIndex $searchTerms,
         private readonly \App\Service\Tmdb\TmdbIdExport $export,
         private readonly \Doctrine\DBAL\Connection $connection,
+        /** The profiler's query log, null outside dev. See the note on memory above. */
+        private readonly ?DebugDataHolder $debugQueries = null,
     ) {
         parent::__construct();
     }
@@ -191,6 +204,10 @@ final class CatalogSyncChangesCommand extends Command
                     $io->writeln(sprintf('  %s stored…', number_format($stored)));
                 }
             }
+
+            // The profiler's query log grows with every window and nothing is
+            // ever going to read it for a console command.
+            $this->debugQueries?->reset();
         }
 
         $this->persister->flush();

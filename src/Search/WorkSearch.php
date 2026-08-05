@@ -23,6 +23,11 @@ use Doctrine\ORM\EntityManagerInterface;
  */
 final class WorkSearch
 {
+    /** Mirrors WorkDetailsWriter's kinds — the writer owns the meaning. */
+    private const TAG_COUNTRY = 1;
+    private const TAG_KEYWORD = 2;
+    private const TAG_COMPANY = 3;
+
     /** Below this many results a correction is worth offering. */
     private const SUGGEST_BELOW = 5;
 
@@ -158,13 +163,14 @@ final class WorkSearch
      * Counts for the filter panel. Each group is counted with its own filter
      * lifted, which is what lets you see "Drama 412" while Drama is selected.
      *
-     * @return array{types: array<string, int>, genres: list<array{slug: string, name: string, count: int}>, decades: list<array{decade: int, count: int}>}
+     * @return array{types: array<string, int>, genres: list<array{slug: string, name: string, count: int}>, countries: list<array{code: string, count: int}>, decades: list<array{decade: int, count: int}>}
      */
     public function facets(SearchCriteria $criteria): array
     {
         return [
             'types' => $this->typeFacet($criteria->without('type')),
             'genres' => $this->genreFacet($criteria->without('genre')),
+            'countries' => $this->countryFacet($criteria->without('country')),
             'decades' => $this->decadeFacet($criteria->without('year')),
         ];
     }
@@ -686,6 +692,39 @@ final class WorkSearch
             }
         }
 
+        /*
+         * Countries, keywords and studios, all one shape.
+         *
+         * EXISTS rather than a join: a work carries about a dozen tags, and
+         * joining would multiply the row by every one that matched before the
+         * count could be taken. The subquery stops at the first hit, and
+         * work_tag's (kind, value, work_id) index answers it without reading
+         * the table at all.
+         *
+         * Any-of, not all-of. "Films from Turkey or Japan" is the question
+         * people ask; "films from Turkey *and* Japan" is a co-production
+         * search, and offering it by default would quietly return almost
+         * nothing. Genres keep their all-of mode because a film really is both
+         * a comedy and a drama at once.
+         */
+        foreach ([
+            'countries' => [self::TAG_COUNTRY, $criteria->countries],
+            'keywords' => [self::TAG_KEYWORD, $criteria->keywords],
+            'companies' => [self::TAG_COMPANY, $criteria->companies],
+        ] as $name => [$kind, $values]) {
+            if ([] === $values) {
+                continue;
+            }
+
+            $clauses[] = "EXISTS (
+                SELECT 1 FROM work_tag wt
+                WHERE wt.work_id = w.id AND wt.kind = :{$name}Kind AND wt.value IN (:{$name})
+            )";
+            $params[$name.'Kind'] = $kind;
+            $params[$name] = $values;
+            $types[$name] = ArrayParameterType::STRING;
+        }
+
         if (null !== $criteria->yearFrom) {
             $clauses[] = 'w.year >= :yearFrom';
             $params['yearFrom'] = $criteria->yearFrom;
@@ -868,6 +907,41 @@ final class WorkSearch
     /**
      * @return list<array{slug: string, name: string, count: int}>
      */
+    /**
+     * Which countries the current result set actually contains, with counts.
+     *
+     * The whole reason countries became rows rather than a jsonb column: a
+     * chip that cannot say how many are behind it is half a filter, and
+     * counting inside jsonb means unnesting an array per matching row with no
+     * index able to help. Here it is a GROUP BY over (kind, value, work_id).
+     *
+     * @return list<array{code: string, count: int}>
+     */
+    private function countryFacet(SearchCriteria $criteria): array
+    {
+        [$where, $params, $types] = $this->conditions($criteria);
+
+        $sample = $this->sampleSql($criteria, $where, $params);
+        $types['sample'] = ParameterType::INTEGER;
+        $params['countryKind'] = self::TAG_COUNTRY;
+
+        $rows = $this->connection()->executeQuery(
+            'SELECT wt.value AS code, COUNT(*) AS n
+             FROM ('.$sample.') w
+             JOIN work_tag wt ON wt.work_id = w.id AND wt.kind = :countryKind
+             GROUP BY wt.value
+             ORDER BY n DESC, wt.value ASC
+             LIMIT 24',
+            $params,
+            $types,
+        )->fetchAllAssociative();
+
+        return array_map(static fn (array $row) => [
+            'code' => (string) $row['code'],
+            'count' => (int) $row['n'],
+        ], $rows);
+    }
+
     private function genreFacet(SearchCriteria $criteria): array
     {
         [$where, $params, $types] = $this->conditions($criteria);

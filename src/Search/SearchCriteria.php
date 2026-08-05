@@ -40,6 +40,16 @@ final class SearchCriteria
         public readonly ?int $votesMin = null,
         public readonly array $certifications = [],
         public readonly array $languages = [],
+        /**
+         * Tags, all three kinds, all matched the same way: work_tag is indexed
+         * (kind, value, work_id), so "which works carry this" is answered from
+         * the index without touching the table. Uppercase ISO codes for
+         * countries — 'TR', not 'Turkey' — because that is what TMDB gives and
+         * what the index holds.
+         */
+        public readonly array $countries = [],
+        public readonly array $keywords = [],
+        public readonly array $companies = [],
         public readonly ?string $person = null,
         public readonly string $releaseState = 'any',
         public readonly string $sort = 'relevance',
@@ -68,6 +78,11 @@ final class SearchCriteria
             votesMin: self::intOrNull($request, 'votesMin'),
             certifications: self::list($request, 'certification'),
             languages: self::list($request, 'language'),
+            // Uppercased because the index holds ISO codes and a query string
+            // saying ?country=tr should still find them.
+            countries: array_map(strtoupper(...), self::list($request, 'country')),
+            keywords: self::list($request, 'keyword'),
+            companies: self::list($request, 'company'),
             person: $request->query->getString('person') ?: null,
             releaseState: self::oneOf($request->query->getString('release'), self::RELEASE_STATES, 'any'),
             sort: self::oneOf($sort, self::SORTS, 'relevance'),
@@ -132,6 +147,9 @@ final class SearchCriteria
             votesMin: $this->votesMin,
             certifications: 'certification' === $group ? [] : $this->certifications,
             languages: 'language' === $group ? [] : $this->languages,
+            countries: 'country' === $group ? [] : $this->countries,
+            keywords: 'keyword' === $group ? [] : $this->keywords,
+            companies: 'company' === $group ? [] : $this->companies,
             person: $this->person,
             releaseState: $this->releaseState,
             sort: $this->sort,

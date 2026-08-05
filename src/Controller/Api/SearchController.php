@@ -135,6 +135,7 @@ class SearchController extends AbstractController
             ], $this->genres->allSorted()),
             'certifications' => $this->works->certifications(),
             'languages' => $this->works->languages(),
+            'countries' => $this->works->countries(),
             'years' => $this->works->yearBounds(),
             // Only the decades that actually hold something — see decades().
             'decades' => $this->works->decades(),

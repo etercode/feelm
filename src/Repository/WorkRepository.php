@@ -351,6 +351,34 @@ class WorkRepository extends ServiceEntityRepository
         ], $rows);
     }
 
+    /**
+     * The countries worth offering in a filter, commonest first.
+     *
+     * Straight off work_tag's (kind, value, work_id) index — a grouped count
+     * with no table read, which is the reason countries are rows here rather
+     * than a jsonb column on works.
+     *
+     * Cached with the rest of the filter lists: it only moves when the crawler
+     * finds a country it had not seen, which is not often.
+     *
+     * @return list<array{code: string, count: int}>
+     */
+    public function countries(int $limit = 40): array
+    {
+        $rows = $this->getEntityManager()->getConnection()->executeQuery(
+            'SELECT value AS code, COUNT(*) AS n FROM work_tag
+             WHERE kind = 1
+             GROUP BY value ORDER BY n DESC, value ASC LIMIT :limit',
+            ['limit' => $limit],
+            ['limit' => \Doctrine\DBAL\ParameterType::INTEGER],
+        )->fetchAllAssociative();
+
+        return array_map(static fn (array $row) => [
+            'code' => (string) $row['code'],
+            'count' => (int) $row['n'],
+        ], $rows);
+    }
+
     /* -------------------------------------------------------------- admin */
 
     /**

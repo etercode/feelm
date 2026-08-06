@@ -77,7 +77,15 @@ say "===== nightly start"
 #
 # --refresh-export re-downloads TMDB's id list. It is not this job's data, but
 # this is the last movie job in the run and refresh-popularity below reads it.
-run "movies" php bin/console app:catalog:sync-changes --refresh-export --days=2
+# --include-backlog because there is no longer a backlog: the initial crawl
+# finished on 2026-08-06 and "still to fetch" is 0. Until then this job had to
+# tell a genuinely new title from one the first crawl had simply not reached,
+# and used the id export to do it — anything already listed there was backlog
+# and was left alone. With the catalogue complete that test inverts: a changed
+# id we do not hold is now, by definition, one TMDB created after our last
+# pass. Leaving the filter on would silently skip exactly the new releases this
+# job exists to catch.
+run "movies" php bin/console app:catalog:sync-changes --refresh-export --days=2 --include-backlog
 
 # New series. Its backlog is finished — a 2,000 ceiling returned 43 titles last
 # night — so this is already a new-titles-only job and stays as it is. Series
@@ -109,9 +117,10 @@ run "details" php bin/console app:catalog:backfill-details --limit=2000 --concur
 # Artwork for anything new. It selects on poster_mirror IS NULL, so titles the
 # sync added or re-posterised today are picked up without being told about.
 #
-# Bounded well above a normal day's churn (a few hundred) but nowhere near the
-# ~100k still outstanding from the original mirror run — that backlog wants one
-# supervised pass, not sixty nights of dribbling through it.
+# The original mirror finished on 2026-08-06 — every poster in the catalogue is
+# in the bucket — so this now only ever sees a day's churn, a few hundred at
+# most. The 3,000 ceiling is headroom for a day TMDB reposters something
+# popular, not a queue being worked through.
 run "artwork" php bin/console app:catalog:mirror-media --limit=3000 --posters-only
 
 say "===== nightly end"

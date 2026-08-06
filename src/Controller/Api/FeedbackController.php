@@ -40,7 +40,13 @@ class FeedbackController extends AbstractController
         $limit = min(self::MAX_LIMIT, max(1, (int) $request->query->get('limit', 20)));
         $page = max(1, (int) $request->query->get('page', 1));
 
-        $result = $repository->pageForUser($user, ($page - 1) * $limit, $limit);
+        // An unknown status degrades to "no filter" rather than a 400, the same
+        // rule the shelf, search and admin listings use: a stale bookmark or a
+        // renamed tab still shows something.
+        $status = $request->query->get('status');
+        $status = \is_string($status) && \in_array($status, Feedback::STATUSES, true) ? $status : null;
+
+        $result = $repository->pageForUser($user, ($page - 1) * $limit, $limit, $status);
 
         return $this->json([
             'items' => array_map(FeedbackPresenter::one(...), $result['items']),
@@ -48,6 +54,9 @@ class FeedbackController extends AbstractController
             'page' => $page,
             'pages' => (int) ceil($result['total'] / $limit),
             'limit' => $limit,
+            // Drives the tab strip. Counted over every status, not just the one
+            // being shown, so switching tabs costs nothing.
+            'counts' => $repository->countsByStatusForUser($user),
         ]);
     }
 

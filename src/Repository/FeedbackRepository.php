@@ -20,13 +20,21 @@ class FeedbackRepository extends ServiceEntityRepository
     /**
      * One person's own reports, newest first.
      *
+     * The status filter is what the tabs on /feedback select with. It is
+     * applied after the user clause and before the count, so the total a tab
+     * pages against is the tab's own and not the whole pile.
+     *
      * @return array{items: list<Feedback>, total: int}
      */
-    public function pageForUser(User $user, int $offset, int $limit): array
+    public function pageForUser(User $user, int $offset, int $limit, ?string $status = null): array
     {
         $qb = $this->createQueryBuilder('f')
             ->andWhere('f.user = :user')
             ->setParameter('user', $user);
+
+        if (null !== $status && '' !== $status) {
+            $qb->andWhere('f.status = :status')->setParameter('status', $status);
+        }
 
         $total = (int) (clone $qb)->select('COUNT(f.id)')->getQuery()->getSingleScalarResult();
 
@@ -103,14 +111,41 @@ class FeedbackRepository extends ServiceEntityRepository
      */
     public function countsByStatus(): array
     {
-        $rows = $this->createQueryBuilder('f')
-            ->select('f.status AS status', 'COUNT(f.id) AS total')
-            ->groupBy('f.status')
-            ->getQuery()
-            ->getArrayResult();
+        return $this->counts(null);
+    }
 
+    /**
+     * The same, for one person's own reports.
+     *
+     * The tabs need every status counted, including the ones they are not
+     * currently showing — a tab that only knows its own number cannot draw the
+     * others, and four separate count queries to fill one strip of tabs is
+     * three too many.
+     *
+     * @return array<string, int>
+     */
+    public function countsByStatusForUser(User $user): array
+    {
+        return $this->counts($user);
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    private function counts(?User $user): array
+    {
+        $qb = $this->createQueryBuilder('f')
+            ->select('f.status AS status', 'COUNT(f.id) AS total')
+            ->groupBy('f.status');
+
+        if (null !== $user) {
+            $qb->andWhere('f.user = :user')->setParameter('user', $user);
+        }
+
+        // Every status present with a zero, so a tab strip is the same width
+        // whether or not anything has reached that state yet.
         $out = array_fill_keys(Feedback::STATUSES, 0);
-        foreach ($rows as $row) {
+        foreach ($qb->getQuery()->getArrayResult() as $row) {
             $out[$row['status']] = (int) $row['total'];
         }
 

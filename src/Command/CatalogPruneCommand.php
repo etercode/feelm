@@ -20,6 +20,18 @@ use Symfony\Component\Console\Style\SymfonyStyle;
  * of a search — weight in every index and every count, showing nothing to
  * anybody. 224,918 films were in that state and are now hidden.
  *
+ * ---- unrated -----------------------------------------------------------------
+ *
+ * Nobody has rated it and nobody is looking at it. This is the rule that
+ * reaches the direct-to-video pornography the blank rule left behind — those
+ * rows have artwork and an IMDb id, so neither other rule touches them, but no
+ * human being has ever voted on one.
+ *
+ * It is a proxy, and an imprecise one: it also takes two hundred thousand
+ * obscure but legitimate films. If the goal is specifically adult content, the
+ * propagation approach through performers and studios is the accurate tool and
+ * this is the blunt one.
+ *
  * ---- no-imdb -----------------------------------------------------------------
  *
  * TMDB holds no IMDb id for it. A blunter rule, and it is worth being honest
@@ -43,7 +55,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
  */
 #[AsCommand(
     name: 'app:catalog:prune',
-    description: 'Hide titles in bulk by rule (blank | no-imdb)',
+    description: 'Hide titles in bulk by rule (blank | unrated | no-imdb)',
 )]
 final class CatalogPruneCommand extends Command
 {
@@ -64,7 +76,7 @@ final class CatalogPruneCommand extends Command
     protected function configure(): void
     {
         $this
-            ->addOption('rule', null, InputOption::VALUE_REQUIRED, 'blank (no art, no votes) or no-imdb', 'blank')
+            ->addOption('rule', null, InputOption::VALUE_REQUIRED, 'blank, unrated or no-imdb', 'blank')
             ->addOption('apply', null, InputOption::VALUE_NONE, 'Actually hide them; without this it only counts')
             ->addOption('restore', null, InputOption::VALUE_NONE, 'Undo a previous run')
             ->addOption('type', null, InputOption::VALUE_REQUIRED, 'Restrict to one type', 'movie')
@@ -168,6 +180,22 @@ final class CatalogPruneCommand extends Command
 
         return match ($rule) {
             'blank' => $base." AND poster IS NULL AND COALESCE(vote_count, 0) = 0",
+
+            /*
+             * Nobody has rated it and nobody is looking at it.
+             *
+             * The popularity floor is not decoration. "No votes" alone reads as
+             * a dead title and is not: an unreleased film has no votes because
+             * it is not out yet, and the rule without a floor takes Avengers:
+             * Doomsday, Avengers: Secret Wars and Ramayana along with the
+             * landfill. TMDB's popularity is a measure of people *looking*, so
+             * an anticipated film scores 20-70 with zero votes while a
+             * direct-to-video title from 2005 sits at 0.
+             *
+             * Two independent signals of "nobody has ever cared", rather than
+             * one signal that also means "not out yet".
+             */
+            'unrated' => $base.' AND COALESCE(vote_count, 0) = 0 AND COALESCE(popularity, 0) < 1',
             'no-imdb' => $base
                 .($includeUnchecked ? '' : ' AND details_synced_at IS NOT NULL')
                 ." AND NOT EXISTS (

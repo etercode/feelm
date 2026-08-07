@@ -3,7 +3,6 @@
 namespace App\Controller\Api\Admin;
 
 use App\Dto\Admin\AdminWorkRequest;
-use App\Entity\User;
 use App\Entity\Work;
 use App\Presenter\WorkPresenter;
 use App\Repository\GenreRepository;
@@ -16,15 +15,16 @@ use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpKernel\Attribute\MapRequestPayload;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Symfony\Component\Routing\Attribute\Route;
-use Symfony\Component\Security\Http\Attribute\IsGranted;
 
 /**
  * The catalog, as the admin sees it — including the parts of it nobody else
  * can.
  *
- * A moderator may look and may correct a title; hiding one from the catalog
- * and putting it back are an administrator's, because a hidden work vanishes
- * from everybody's shelves at once.
+ * Everything here sits at the firewall's ROLE_MODERATOR floor. Hiding a title
+ * and putting it back used to ask for ROLE_ADMIN, on the grounds that a hidden
+ * work leaves everybody's shelves at once — but it is reversible by the same
+ * person in the same screen, and clearing the catalogue of artwork we cannot
+ * show is the moderation job itself rather than an escalation of it.
  *
  * There is no create endpoint. Works come from the crawler, which owns their
  * identity through external_ids; a hand-made row with no external id would be
@@ -37,7 +37,7 @@ class WorkAdminController extends AbstractController
 
     private const SORTS = ['popular', 'title', 'year', 'oldest', 'added', 'score', 'hidden'];
 
-    private const STATUSES = ['active', 'deleted', 'all'];
+    private const STATUSES = ['active', 'deleted', 'adult', 'all'];
 
     private const MISSING = ['poster', 'overview', 'year', 'genre', 'imdb'];
 
@@ -114,9 +114,13 @@ class WorkAdminController extends AbstractController
 
     /**
      * Hides a work from the catalog. Not a delete — see WorkAdmin.
+     *
+     * ROLE_MODERATOR, the firewall's floor for /api/admin. It was ROLE_ADMIN,
+     * which left a moderator able to hide a hundred titles through the bulk
+     * route and not one on its own — a boundary that only meant the same person
+     * took the longer way round.
      */
     #[Route('/api/admin/works/{id}', name: 'api_admin_works_delete', methods: ['DELETE'], requirements: ['id' => '\d+'])]
-    #[IsGranted(User::ROLE_ADMIN)]
     public function hide(int $id, WorkAdmin $admin): JsonResponse
     {
         try {
@@ -128,8 +132,44 @@ class WorkAdminController extends AbstractController
         return $this->json(null, Response::HTTP_NO_CONTENT);
     }
 
+    /**
+     * The same actions over a selection.
+     *
+     * ROLE_MODERATOR, like hide and restore either side of it. Clearing the
+     * catalogue of artwork we cannot show is moderation work, it is done a
+     * filmography at a time, and everything it does is reversible by the same
+     * endpoint.
+     */
+    #[Route('/api/admin/works/bulk', name: 'api_admin_works_bulk', methods: ['POST'], format: 'json')]
+    public function bulk(Request $request, WorkAdmin $admin): JsonResponse
+    {
+        $payload = json_decode($request->getContent() ?: '{}', true);
+        $action = \is_array($payload) ? ($payload['action'] ?? null) : null;
+        $ids = \is_array($payload) && \is_array($payload['ids'] ?? null) ? $payload['ids'] : [];
+
+        // Cast and de-duplicate here rather than trusting the browser: the same
+        // title selected twice would otherwise be counted twice in the reply.
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+
+        if ([] === $ids) {
+            return $this->json(['error' => 'no_ids'], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        if (\count($ids) > WorkAdmin::BULK_LIMIT) {
+            return $this->json(['error' => 'too_many'], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        try {
+            $result = $admin->bulk($ids, (string) $action);
+        } catch (\InvalidArgumentException $e) {
+            return $this->json(['error' => $e->getMessage()], Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
+        return $this->json($result);
+    }
+
+    /** ROLE_MODERATOR, like hide — undoing it cannot need more rights than doing it. */
     #[Route('/api/admin/works/{id}/restore', name: 'api_admin_works_restore', methods: ['POST'], requirements: ['id' => '\d+'])]
-    #[IsGranted(User::ROLE_ADMIN)]
     public function restore(int $id, WorkAdmin $admin): JsonResponse
     {
         $work = $this->mustFind($id);

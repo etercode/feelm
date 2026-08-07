@@ -134,11 +134,25 @@ final class CatalogSyncChangesCommand extends Command
             ? $strangers
             : $this->notInExport($strangers);
 
+        /*
+         * Titles a moderator has hidden are dropped before anything is fetched.
+         *
+         * Without this the nightly sync spends a request re-reading every one
+         * of them, every night, for a row it will write and nobody will ever
+         * see — and a filmography hidden for its artwork is exactly the kind of
+         * thing TMDB keeps editing. persist() would not un-hide them, so this
+         * is about the wasted half of the run rather than about correctness.
+         */
+        $before = \count($ours);
+        $ours = $this->withoutHidden($ours);
+        $hidden = $before - \count($ours);
+
         $io->writeln(sprintf(
-            '  %s changed · %s ours · %s new · %s left to the backlog crawl',
+            '  %s changed · %s ours · %s new · %s hidden · %s left to the backlog crawl',
             number_format(\count($changed)),
             number_format(\count($ours)),
             number_format(\count($fresh)),
+            number_format($hidden),
             number_format(\count($strangers) - \count($fresh)),
         ));
 
@@ -283,5 +297,50 @@ final class CatalogSyncChangesCommand extends Command
         }
 
         return $fresh;
+    }
+
+    /**
+     * Drops the TMDB ids whose work a moderator has hidden.
+     *
+     * Joined through external_ids rather than looked up one at a time, and
+     * chunked for the same reason weStore() is: the id list is unbounded and
+     * Postgres has a ceiling on bound parameters.
+     *
+     * @param list<int> $tmdbIds
+     *
+     * @return list<int>
+     */
+    private function withoutHidden(array $tmdbIds): array
+    {
+        if ([] === $tmdbIds) {
+            return [];
+        }
+
+        $keep = [];
+
+        foreach (array_chunk($tmdbIds, 1000) as $chunk) {
+            $hidden = $this->connection->executeQuery(
+                'SELECT x.external_id
+                   FROM external_ids x
+                   JOIN works w ON w.id = x.work_id
+                  WHERE x.source = :source
+                    AND x.external_id IN (:ids)
+                    AND w.deleted_at IS NOT NULL',
+                [
+                    'source' => ExternalId::SOURCE_TMDB,
+                    'ids' => array_map('strval', $chunk),
+                ],
+                ['ids' => \Doctrine\DBAL\ArrayParameterType::STRING],
+            )->fetchFirstColumn();
+
+            $skip = array_flip(array_map('intval', $hidden));
+            foreach ($chunk as $id) {
+                if (!isset($skip[$id])) {
+                    $keep[] = $id;
+                }
+            }
+        }
+
+        return $keep;
     }
 }

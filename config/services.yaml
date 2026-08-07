@@ -73,6 +73,14 @@ services:
         arguments:
             $publicBaseUrl: '%env(PUBLIC_BASE_URL)%'
 
+    # The whole service account JSON, not a path: the key has to reach the
+    # container without being a file somebody can forget to mount. Blank by
+    # default so a checkout with no Firebase project still boots — FcmSender
+    # reports itself unconfigured and every push is a no-op.
+    App\Service\Notify\FcmSender:
+        arguments:
+            $serviceAccountJson: '%env(default:env_blank:FCM_SERVICE_ACCOUNT)%'
+
     # Empty defaults so a checkout without a bucket still boots — ObjectStorage
     # reports itself unconfigured and the site serves TMDB's URLs as before.
     App\Service\Media\ObjectStorage:

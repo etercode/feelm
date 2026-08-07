@@ -242,4 +242,39 @@ class UserRepository extends ServiceEntityRepository
 
         return $users;
     }
+
+    /**
+     * Accounts in these timezones that have not had a digest recently.
+     *
+     * Narrowed to people with at least one registered device, because the
+     * digest's expensive half is the catalog query that follows and running it
+     * for accounts that have never installed the app is work with nowhere to
+     * go. Somebody who signs in on a phone at 08:59 is picked up by the next
+     * run, which is the correct answer anyway.
+     *
+     * @param list<string> $timezones
+     *
+     * @return list<User>
+     */
+    public function findForDigest(array $timezones, \DateTimeImmutable $notSince): array
+    {
+        if ([] === $timezones) {
+            return [];
+        }
+
+        /** @var list<User> $users */
+        $users = $this->createQueryBuilder('u')
+            ->andWhere('u.deletedAt IS NULL')
+            ->andWhere('u.timezone IN (:zones)')
+            ->andWhere('u.pushDigestAt IS NULL OR u.pushDigestAt < :notSince')
+            ->andWhere('EXISTS (
+                SELECT 1 FROM App\Entity\DeviceToken d WHERE d.user = u
+            )')
+            ->setParameter('zones', $timezones)
+            ->setParameter('notSince', $notSince)
+            ->getQuery()
+            ->getResult();
+
+        return $users;
+    }
 }

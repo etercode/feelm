@@ -276,6 +276,8 @@ final class WorkPresenter
             'addedAt' => $work->getAddedAt()?->format(\DateTimeInterface::ATOM),
             'deletedAt' => $work->getDeletedAt()?->format(\DateTimeInterface::ATOM),
             'hidden' => $work->isDeleted(),
+            // Why it is hidden, not a second kind of hidden — see WorkAdmin.
+            'adult' => $work->isAdult(),
         ];
     }
 

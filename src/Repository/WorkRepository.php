@@ -460,6 +460,10 @@ class WorkRepository extends ServiceEntityRepository
         // is the only place the default can be overridden.
         $clauses[] = match ($filters['status'] ?? null) {
             'deleted' => 'w.deleted_at IS NOT NULL',
+            // Hidden *for being 18+* specifically, which is the list somebody
+            // reviewing that judgement wants — not every hidden row mixed in
+            // with the duplicates and the phantoms.
+            'adult' => 'w.adult',
             'all' => 'TRUE',
             default => 'w.deleted_at IS NULL',
         };

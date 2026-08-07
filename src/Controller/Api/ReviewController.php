@@ -5,7 +5,9 @@ namespace App\Controller\Api;
 use App\Dto\SaveReviewRequest;
 use App\Entity\User;
 use App\Presenter\ReviewPresenter;
+use App\Repository\FollowRepository;
 use App\Repository\WorkRepository;
+use App\Service\Notify\PushNotifier;
 use App\Service\ReviewService;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -25,6 +27,8 @@ class ReviewController extends AbstractController
         #[CurrentUser] User $user,
         WorkRepository $workRepository,
         ReviewService $reviewService,
+        FollowRepository $followRepository,
+        PushNotifier $push,
     ): JsonResponse {
         $work = $workRepository->findOneByTypeAndSlug($type, $slug);
         if (null === $work) {
@@ -35,6 +39,24 @@ class ReviewController extends AbstractController
             $review = $reviewService->save($user, $work, $payload->rating, $payload->body);
         } catch (\InvalidArgumentException $e) {
             return $this->json(['error' => $e->getMessage()], Response::HTTP_BAD_REQUEST);
+        }
+
+        /*
+         * Fanned out inline rather than queued. Feelm has no message broker, and
+         * the shape of the graph is what makes that acceptable: this is a
+         * personal watchlist, so followings run to dozens, not the millions that
+         * make fan-out-on-write a research problem. FcmSender swallows its own
+         * failures, so the worst case is a slow save, not a failed one.
+         *
+         * The day somebody accumulates thousands of followers, this moves
+         * behind Messenger and nothing else changes — which is why the loop is
+         * here and not inside ReviewService.
+         */
+        foreach ($followRepository->findFollowers($user) as $follow) {
+            $follower = $follow->getFollower();
+            if (null !== $follower) {
+                $push->activity($follower, $review);
+            }
         }
 
         return $this->json(ReviewPresenter::one($review));

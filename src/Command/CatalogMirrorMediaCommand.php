@@ -276,18 +276,33 @@ final class CatalogMirrorMediaCommand extends Command
      */
     private function todo(int $limit, bool $postersOnly): array
     {
-        $where = $postersOnly
-            ? "poster_mirror IS NULL AND poster LIKE 'http%'"
-            : "(poster_mirror IS NULL AND poster LIKE 'http%')
-               OR (backdrop_mirror IS NULL AND backdrop LIKE 'http%')";
-
         return $this->connection->executeQuery(
-            "SELECT id, poster, backdrop, poster_mirror, backdrop_mirror
+            'SELECT id, poster, backdrop, poster_mirror, backdrop_mirror
              FROM works
-             WHERE {$where}
+             WHERE '.$this->outstanding($postersOnly).'
              ORDER BY popularity DESC NULLS LAST, id
-             LIMIT {$limit}",
+             LIMIT '.$limit,
         )->fetchAllAssociative();
+    }
+
+    /**
+     * Which rows still owe us an image — the one definition, shared by the
+     * worker and the counter, because two copies of it drifting means a job
+     * that reports a number it is not working through.
+     *
+     * Hidden titles are excluded. A work is hidden either because it is wrong
+     * or because it is 18+, and in the second case its poster is the entire
+     * reason it was hidden — fetching that image into our own bucket is the
+     * opposite of what the flag was for.
+     */
+    private function outstanding(bool $postersOnly): string
+    {
+        $needs = $postersOnly
+            ? "poster_mirror IS NULL AND poster LIKE 'http%'"
+            : "((poster_mirror IS NULL AND poster LIKE 'http%')
+                OR (backdrop_mirror IS NULL AND backdrop LIKE 'http%'))";
+
+        return 'deleted_at IS NULL AND '.$needs;
     }
 
     /**
@@ -413,12 +428,9 @@ final class CatalogMirrorMediaCommand extends Command
 
     private function remaining(bool $postersOnly): int
     {
-        $where = $postersOnly
-            ? "poster_mirror IS NULL AND poster LIKE 'http%'"
-            : "(poster_mirror IS NULL AND poster LIKE 'http%')
-               OR (backdrop_mirror IS NULL AND backdrop LIKE 'http%')";
-
-        return (int) $this->connection->executeQuery("SELECT COUNT(*) FROM works WHERE {$where}")->fetchOne();
+        return (int) $this->connection
+            ->executeQuery('SELECT COUNT(*) FROM works WHERE '.$this->outstanding($postersOnly))
+            ->fetchOne();
     }
 
     private function status(SymfonyStyle $io, bool $postersOnly): int

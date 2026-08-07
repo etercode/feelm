@@ -7,6 +7,7 @@ use App\Entity\User;
 use App\Presenter\UserPresenter;
 use App\Repository\FollowRepository;
 use App\Repository\UserRepository;
+use App\Service\Notify\PushNotifier;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -24,6 +25,7 @@ class FollowController extends AbstractController
         UserRepository $userRepository,
         FollowRepository $followRepository,
         EntityManagerInterface $entityManager,
+        PushNotifier $push,
     ): JsonResponse {
         $target = $userRepository->findOneActiveByUsername($username);
         if (null === $target) {
@@ -45,6 +47,10 @@ class FollowController extends AbstractController
         $follow = (new Follow())->setFollower($user)->setFollowed($target);
         $entityManager->persist($follow);
         $entityManager->flush();
+
+        // After the flush: a push about a follow that failed to save would be
+        // the one notification guaranteed to be wrong.
+        $push->followed($target, $user);
 
         return $this->json(['following' => true]);
     }

@@ -155,9 +155,84 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
     #[ORM\Column(type: Types::DATETIME_IMMUTABLE, nullable: true)]
     private ?\DateTimeImmutable $seenUpTo = null;
 
+    /**
+     * Which pushes this account wants, as {kind: bool}.
+     *
+     * Absent means yes, exactly as the Telegram event toggles work: a person who
+     * has never opened notification settings should still hear that a series
+     * they are watching aired tonight. Only an explicit false silences a kind,
+     * so adding a new kind later switches it on for everybody rather than
+     * shipping dark to the entire user base.
+     *
+     * Not a column per kind: the set changes as features land, and four
+     * migrations to add four booleans is four deploys to answer a product
+     * question.
+     *
+     * @var array<string, bool>
+     */
+    // jsonb, not json: Doctrine's json type maps to plain JSON on Postgres, and
+    // the column was created as JSONB. Without this the mapping and the database
+    // disagree forever and schema:validate never comes back clean.
+    #[ORM\Column(type: Types::JSON, options: ['default' => '{}', 'jsonb' => true])]
+    private array $pushPrefs = [];
+
+    /**
+     * When the morning digest last went to this account.
+     *
+     * The guard that makes app:push:digest safe to run twice. Without it the
+     * command is only correct while cron is, and "somebody ran it by hand"
+     * becomes a duplicate notification for everybody in that timezone.
+     */
+    #[ORM\Column(type: Types::DATETIME_IMMUTABLE, nullable: true)]
+    private ?\DateTimeImmutable $pushDigestAt = null;
+
+    public function getPushDigestAt(): ?\DateTimeImmutable
+    {
+        return $this->pushDigestAt;
+    }
+
+    public function setPushDigestAt(?\DateTimeImmutable $at): static
+    {
+        $this->pushDigestAt = $at;
+
+        return $this;
+    }
+
     public function getSeenUpTo(): ?\DateTimeImmutable
     {
         return $this->seenUpTo;
+    }
+
+    /** @return array<string, bool> */
+    public function getPushPrefs(): array
+    {
+        return $this->pushPrefs;
+    }
+
+    /**
+     * Whether this account wants one kind of push.
+     *
+     * @param string $kind one of PushNotifier::KINDS
+     */
+    public function wantsPush(string $kind): bool
+    {
+        return false !== ($this->pushPrefs[$kind] ?? true);
+    }
+
+    /**
+     * Only the kinds actually named are touched, so a client that knows about
+     * three kinds cannot silently reset a fourth it has never heard of — which
+     * is what an older app version would do on every settings save.
+     *
+     * @param array<string, bool> $prefs
+     */
+    public function setPushPrefs(array $prefs): static
+    {
+        foreach ($prefs as $kind => $wanted) {
+            $this->pushPrefs[$kind] = (bool) $wanted;
+        }
+
+        return $this;
     }
 
     public function setSeenUpTo(?\DateTimeImmutable $seenUpTo): static

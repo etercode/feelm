@@ -6,6 +6,7 @@ use App\Dto\Admin\AdminWorkRequest;
 use App\Entity\Work;
 use App\Entity\WorkRating;
 use App\Repository\GenreRepository;
+use App\Repository\WorkRepository;
 use Doctrine\ORM\EntityManagerInterface;
 
 /**
@@ -23,9 +24,23 @@ use Doctrine\ORM\EntityManagerInterface;
  */
 final class WorkAdmin
 {
+    /** What bulk() accepts. Mirrored in the client so the two cannot drift. */
+    public const BULK_ACTIONS = ['adult', 'not_adult', 'delete', 'restore'];
+
+    /**
+     * How many titles one call may carry.
+     *
+     * A filmography is the unit here and the longest run to a few hundred, so
+     * this is headroom rather than a limit anybody meets. It exists because the
+     * ids arrive from a browser and `findBy(['id' => $ids])` would otherwise
+     * hand Postgres an unbounded IN list.
+     */
+    public const BULK_LIMIT = 500;
+
     public function __construct(
         private readonly EntityManagerInterface $entityManager,
         private readonly GenreRepository $genres,
+        private readonly WorkRepository $works,
     ) {
     }
 
@@ -172,6 +187,105 @@ final class WorkAdmin
     }
 
     /**
+     * The same four actions over a list of ids.
+     *
+     * Built for the way the work is actually done: open an actor whose entire
+     * filmography is the problem, select the lot, act once. A hundred separate
+     * requests to hide a hundred titles is a hundred chances for one to be lost
+     * halfway, and no way to tell which.
+     *
+     * A title already in the state being asked for is skipped rather than
+     * refused. Over a filmography that case is the norm — the selection is
+     * "everything on this page", and some of it was dealt with last week — so
+     * treating it as an error would make the common path the failing one.
+     *
+     * @param list<int> $ids
+     *
+     * @return array{changed: int, skipped: int}
+     *
+     * @throws \InvalidArgumentException on an unknown action
+     */
+    public function bulk(array $ids, string $action): array
+    {
+        if (!\in_array($action, self::BULK_ACTIONS, true)) {
+            throw new \InvalidArgumentException('unknown_action');
+        }
+
+        $changed = 0;
+        $skipped = 0;
+
+        foreach ($this->works->findBy(['id' => $ids]) as $work) {
+            $done = match ($action) {
+                'adult' => $this->applyAdult($work, true),
+                'not_adult' => $this->applyAdult($work, false),
+                'delete' => $this->applyHidden($work, true),
+                'restore' => $this->applyHidden($work, false),
+            };
+
+            $done ? ++$changed : ++$skipped;
+        }
+
+        // One flush for the whole batch rather than one per title: the point of
+        // this endpoint is that it is a single unit of work.
+        $this->entityManager->flush();
+
+        return ['changed' => $changed, 'skipped' => $skipped];
+    }
+
+    /**
+     * ---- why flagging as adult also sets deletedAt --------------------------
+     *
+     * Hiding is `deleted_at`, and it stays that way. Every read path in the
+     * application already checks that column — WorkSearch's hand-written SQL, a
+     * dozen queries in WorkRepository, the browse facets, the rails — and
+     * introducing a second thing they would all have to check as well is
+     * introducing a place where one of them forgets. That is not a theoretical
+     * worry: a title would fail *open* on the query that was missed, staying
+     * visible, which for this flag means showing the artwork we are hiding it
+     * for.
+     *
+     * So `adult` records *why* a row is hidden rather than doing the hiding.
+     * The two move together, and the difference between a title hidden for
+     * being 18+ and one hidden for being a duplicate is a column the moderation
+     * screens read and nothing else has to.
+     *
+     * Should adult titles ever go behind a viewer's own setting, the read paths
+     * change from `deleted_at IS NULL` to something that admits them back —
+     * the same work as gating on a separate column, and none of it made harder
+     * by this.
+     *
+     * @return bool whether anything actually changed
+     */
+    private function applyAdult(Work $work, bool $adult): bool
+    {
+        if ($work->isAdult() === $adult) {
+            return false;
+        }
+
+        $work->setAdult($adult);
+        $work->setDeletedAt($adult ? new \DateTimeImmutable() : null);
+
+        return true;
+    }
+
+    /** @return bool whether anything actually changed */
+    private function applyHidden(Work $work, bool $hidden): bool
+    {
+        if ($work->isDeleted() === $hidden) {
+            return false;
+        }
+
+        if ($hidden) {
+            $work->softDelete();
+        } else {
+            $work->setDeletedAt(null);
+            $work->setAdult(false);
+        }
+
+        return true;
+    }
+
+    /**
      * @throws \InvalidArgumentException
      */
     public function restore(Work $work): void
@@ -179,6 +293,10 @@ final class WorkAdmin
         if (!$work->isDeleted()) {
             throw new \InvalidArgumentException('not_deleted');
         }
+
+        // Un-hiding a title that was hidden *for* being 18+ has to clear the
+        // reason as well, or it comes back flagged and visible at once.
+        $work->setAdult(false);
 
         /*
          * Nothing to check for collisions, unlike restoring an account: the

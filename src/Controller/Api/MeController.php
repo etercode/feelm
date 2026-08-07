@@ -8,6 +8,7 @@ use App\Dto\UpdatePreferencesRequest;
 use App\Dto\UpdateProfileRequest;
 use App\Entity\User;
 use App\Presenter\UserPresenter;
+use App\Repository\AccessTokenRepository;
 use App\Repository\UserRepository;
 use App\Service\User\AvatarStorage;
 use Doctrine\ORM\EntityManagerInterface;
@@ -132,6 +133,41 @@ class MeController extends AbstractController
         // Tokens already issued stay valid. Signing every device out on a
         // password change is defensible, but it is a bigger decision than this
         // endpoint should be making on its own.
+        return $this->json(null, Response::HTTP_NO_CONTENT);
+    }
+
+    /**
+     * Close the account.
+     *
+     * Google Play requires this of any app that lets people sign up: a route
+     * to deletion from inside the app, and a public page saying how. Without
+     * it a build does not reach any track.
+     *
+     * Soft delete, the same mechanism an administrator's delete uses — the row
+     * stays, `deleted_at` is set, UserChecker rejects the account on the next
+     * request, and the profile and everything on it leaves the site. That it
+     * can be restored is the reason this endpoint does not ask for a password:
+     * a stolen token could trigger it, and the answer to that is a support
+     * request rather than a confirmation dialog that a stolen token would sail
+     * through anyway.
+     *
+     * The tokens go immediately rather than being left to expire, so the app
+     * that just called this is signed out by the time it draws the next screen.
+     */
+    #[Route('/api/me', name: 'api_me_delete', methods: ['DELETE'], format: 'json')]
+    public function delete(
+        #[CurrentUser] User $user,
+        AccessTokenRepository $accessTokens,
+        EntityManagerInterface $entityManager,
+    ): JsonResponse {
+        if ($user->isDeleted()) {
+            return $this->json(['error' => 'already_deleted'], Response::HTTP_CONFLICT);
+        }
+
+        $user->softDelete();
+        $accessTokens->revokeAllFor($user);
+        $entityManager->flush();
+
         return $this->json(null, Response::HTTP_NO_CONTENT);
     }
 

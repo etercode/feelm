@@ -203,6 +203,28 @@ class Work
     #[ORM\Column(type: Types::DATETIME_IMMUTABLE, nullable: true)]
     private ?\DateTimeImmutable $deletedAt = null;
 
+    /**
+     * Hidden for being 18+ rather than for being wrong.
+     *
+     * A second flag and not a reuse of deletedAt, because the two mean
+     * different things and will not always act the same. A deleted work is a
+     * mistake — a duplicate, a phantom, something that should never have been
+     * crawled. An adult work is a real film that is correctly in the catalogue
+     * and simply must not be shown, which is a thing that could later be put
+     * behind a viewer's own setting rather than removed outright.
+     *
+     * TMDB cannot answer this for us. Its own `adult` flag marks pornography
+     * and is excluded from the id exports before we ever see them, so every
+     * title we hold is already `adult: false` — including the erotic and
+     * exploitation cinema whose artwork is the actual problem. This flag is
+     * therefore set by hand, which is why the moderation tools exist.
+     *
+     * Read paths treat it exactly like deletedAt; see the note above about
+     * lookup by external id, which must not filter on either.
+     */
+    #[ORM\Column(options: ['default' => false])]
+    private bool $adult = false;
+
     /** @var Collection<int, Genre> */
     #[ORM\ManyToMany(targetEntity: Genre::class, inversedBy: 'works')]
     #[ORM\JoinTable(name: 'work_genre')]
@@ -557,6 +579,18 @@ class Work
     public function isDeleted(): bool
     {
         return null !== $this->deletedAt;
+    }
+
+    public function isAdult(): bool
+    {
+        return $this->adult;
+    }
+
+    public function setAdult(bool $adult): static
+    {
+        $this->adult = $adult;
+
+        return $this;
     }
 
     public function softDelete(): static

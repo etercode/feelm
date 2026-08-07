@@ -95,10 +95,8 @@ class SearchController extends AbstractController
             'total' => $result['total'],
             'totalIsExact' => $result['totalIsExact'],
             'suggestion' => $result['suggestion'],
-            'people' => array_map(static fn ($person) => [
-                'slug' => $person->getSlug(),
-                'name' => $person->getName(),
-            ], $this->people->searchByName((string) $criteria->query, 4)),
+            // Already exactly {slug, name} — see PersonRepository::searchByName.
+            'people' => $this->people->searchByName((string) $criteria->query, 4),
         ]);
     }
 

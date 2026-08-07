@@ -84,20 +84,79 @@ class PersonRepository extends ServiceEntityRepository
     }
 
     /**
-     * Name search for the "by person" filter.
+     * Name search for the "by person" filter and the search overlay.
      *
-     * @return list<Person>
+     * @return list<array{slug: string, name: string}>
      */
     public function searchByName(string $query, int $limit = 8): array
     {
-        // ILIKE is Postgres, not DQL — lower() both sides instead.
-        return $this->createQueryBuilder('p')
-            ->andWhere('LOWER(p.name) LIKE :like')
-            ->setParameter('like', '%'.mb_strtolower(trim($query)).'%')
-            ->orderBy('p.name', 'ASC')
-            ->setMaxResults($limit)
-            ->getQuery()
-            ->getResult();
+        /*
+         * ILIKE, in raw SQL, and that is the whole point of this method not
+         * being a QueryBuilder any more.
+         *
+         * It used to say `LOWER(p.name) LIKE :like`, with a comment explaining
+         * that ILIKE is not DQL so lower() was used on both sides instead.
+         * That works, and it silently cost every keystroke a full table scan:
+         * the trigram index is `gin (name gin_trgm_ops)`, on the column, and an
+         * index on `name` cannot answer a predicate about `lower(name)`. So
+         * Postgres read all 2,092,770 rows, every time anybody typed a letter.
+         *
+         *   LOWER(name) LIKE   372ms   Parallel Seq Scan, 2.09M rows
+         *   name ILIKE         145ms   Bitmap Index Scan on idx_person_name_trgm
+         *
+         * Returning rows rather than entities because both callers want a slug
+         * and a name and nothing else — hydrating Person objects to read two
+         * strings off them is work nobody asked for.
+         */
+        return $this->nameRows($query, $limit, 'p.slug, p.name');
+    }
+
+    /**
+     * The same search, as entities, for the admin — which needs the id to count
+     * credits against and the whole object to present.
+     *
+     * @return list<Person>
+     */
+    public function searchEntitiesByName(string $query, int $limit = 8): array
+    {
+        $ids = array_map(
+            static fn (array $row) => (int) $row['id'],
+            $this->nameRows($query, $limit, 'p.id'),
+        );
+
+        if ([] === $ids) {
+            return [];
+        }
+
+        // findBy returns them in whatever order Postgres feels like, so the
+        // name ordering the search just established is applied again here.
+        $people = $this->findBy(['id' => $ids]);
+        usort($people, static fn (Person $a, Person $b) => strcmp((string) $a->getName(), (string) $b->getName()));
+
+        return $people;
+    }
+
+    /**
+     * @param string $columns trusted, and never built from input
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function nameRows(string $query, int $limit, string $columns): array
+    {
+        return $this->getEntityManager()->getConnection()->executeQuery(
+            'SELECT '.$columns.'
+               FROM people p
+              WHERE p.name ILIKE :like
+              ORDER BY p.name ASC
+              LIMIT :limit',
+            [
+                // Escaped so a name containing % or _ is searched for literally
+                // rather than turning into a wildcard of its own.
+                'like' => '%'.addcslashes(trim($query), '%_\\').'%',
+                'limit' => $limit,
+            ],
+            ['limit' => ParameterType::INTEGER],
+        )->fetchAllAssociative();
     }
 
     public function findBySlug(string $slug): ?Person

@@ -389,6 +389,31 @@ final class WorkPresenter
         $details['releaseDate'] = $work->getReleaseDate()?->format('Y-m-d');
         $details['originalLanguage'] = $work->getOriginalLanguage();
 
+        /*
+         * The columns the details backfill filled and nothing ever read.
+         *
+         * Sent only when they hold something. A film with no budget on record
+         * should not carry `"budget": 0` into the payload for the detail sheet
+         * to have to decide is meaningless — absent says that better, and the
+         * sheet already draws only the facts it was given.
+         */
+        foreach ([
+            'budget' => $work->getBudget(),
+            'revenue' => $work->getRevenue(),
+        ] as $key => $amount) {
+            if (null !== $amount && $amount > 0) {
+                $details[$key] = $amount;
+            }
+        }
+
+        if (null !== ($homepage = $work->getHomepage()) && '' !== $homepage) {
+            $details['homepage'] = $homepage;
+        }
+
+        if ([] !== ($spoken = $work->getSpokenLanguages() ?? [])) {
+            $details['spokenLanguages'] = $spoken;
+        }
+
         foreach ([
             'directors' => Credit::ROLE_DIRECTOR,
             'writers' => Credit::ROLE_WRITER,

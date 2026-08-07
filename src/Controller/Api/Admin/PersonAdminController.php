@@ -81,7 +81,7 @@ class PersonAdminController extends AbstractController
             return $this->json(['items' => []]);
         }
 
-        $found = $this->people->searchByName($term, min(20, max(1, $request->query->getInt('limit', 8))));
+        $found = $this->people->searchEntitiesByName($term, min(20, max(1, $request->query->getInt('limit', 8))));
         $counts = $this->people->creditCountsFor(array_map(
             static fn (Person $person) => (int) $person->getId(),
             $found,

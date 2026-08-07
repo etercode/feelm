@@ -8,6 +8,8 @@ use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\ParameterType;
 use Doctrine\ORM\EntityManagerInterface;
+use Symfony\Contracts\Cache\CacheInterface;
+use Symfony\Contracts\Cache\ItemInterface;
 
 /**
  * The catalog search.
@@ -65,10 +67,88 @@ final class WorkSearch
      */
     private array $fuzzy = [];
 
+    /**
+     * How long the genre/type map is held. It only changes when the crawl
+     * gives a genre its first title of a kind it had none of, which is a thing
+     * that happens once per genre in the life of the catalogue.
+     */
+    private const PAIRS_CACHE_SECONDS = 3600;
+
     public function __construct(
         private readonly EntityManagerInterface $entityManager,
         private readonly WorkHydrator $hydrator,
+        private readonly CacheInterface $cache,
     ) {
+    }
+
+    /**
+     * Which genres hold at least one work of which type.
+     *
+     * ---- why this exists -----------------------------------------------------
+     *
+     * TMDB keeps two genre lists, one for film and one for television, and we
+     * store them in one table. Eight of them are television's alone — kids,
+     * reality, soap, talk, news, sci-fi-fantasy, action-adventure,
+     * war-politics — and asking for one of those together with type=movie is a
+     * question with no answer.
+     *
+     * Postgres handles that case appallingly, through no fault of its own. The
+     * plan walks the popularity index looking for the seventy most popular
+     * matches, and since there are none it walks all 1,225,880 of them, probing
+     * the genre of each: 7.8 million buffer hits and eleven seconds to return
+     * nothing. Every genre that does have films answers in 20-110ms, because
+     * the scan stops as soon as it has seventy.
+     *
+     * So the query shape is right and is left alone. What is wrong is asking it
+     * a question whose answer is known in advance to be empty.
+     *
+     * @return array<string, list<string>> genre slug => the types it appears in
+     */
+    private function genreTypes(): array
+    {
+        return $this->cache->get('search.genre_types', function (ItemInterface $item): array {
+            $item->expiresAfter(self::PAIRS_CACHE_SECONDS);
+
+            $rows = $this->entityManager->getConnection()->executeQuery(
+                'SELECT DISTINCT g.slug, w.type
+                   FROM genres g
+                   JOIN work_genre wg ON wg.genre_id = g.id
+                   JOIN works w ON w.id = wg.work_id AND w.deleted_at IS NULL',
+            )->fetchAllAssociative();
+
+            $out = [];
+            foreach ($rows as $row) {
+                $out[(string) $row['slug']][] = (string) $row['type'];
+            }
+
+            return $out;
+        });
+    }
+
+    /**
+     * Whether this combination of genres and types can match anything at all.
+     *
+     * False only when every genre asked for is absent from every type asked
+     * for. One workable pair is enough — the rest of the WHERE is the query's
+     * business, not this method's.
+     */
+    private function combinationIsPossible(SearchCriteria $criteria): bool
+    {
+        if ([] === $criteria->genres || [] === $criteria->types) {
+            return true;
+        }
+
+        $pairs = $this->genreTypes();
+
+        foreach ($criteria->genres as $genre) {
+            foreach ($pairs[$genre] ?? [] as $type) {
+                if (\in_array($type, $criteria->types, true)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -109,6 +189,32 @@ final class WorkSearch
          */
         $total = null;
         $exact = true;
+
+        /*
+         * A relevance search counts itself.
+         *
+         * Its pool already carries COUNT(*) OVER (), so the capped COUNT below
+         * was a second pass over exactly the rows the pool had just walked —
+         * about 460ms of every text search, spent re-deriving a number already
+         * in hand. The pool is bigger than the ceiling, so anything the ceiling
+         * could have said, the pool can say too.
+         */
+        if ($this->ranksByRelevance($criteria)) {
+            [$ids, $pool] = $this->ids($criteria, $where, $params, $types);
+            $pool ??= 0;
+
+            if ($withTotal) {
+                $total = min($pool, self::COUNT_CEILING);
+                $exact = $pool < self::COUNT_CEILING;
+            }
+
+            // The pool is the ceiling on what can be paged to either way, so
+            // its size settles this without another row being fetched.
+            $hasMore = $criteria->offset() + \count($ids) < $pool;
+
+            return $this->result($criteria, $ids, $total, $exact, $hasMore, $withSuggestion);
+        }
+
         if ($withTotal) {
             $total = (int) $this->connection()->executeQuery(
                 'SELECT COUNT(*) FROM (
@@ -128,7 +234,7 @@ final class WorkSearch
          * there is nothing after it — with 305,242 rows still to come.
          */
         $overfetch = $withTotal && $exact ? 0 : 1;
-        $ids = $this->ids($criteria, $where, $params, $types, $overfetch);
+        [$ids] = $this->ids($criteria, $where, $params, $types, $overfetch);
         $hasMore = 0 === $overfetch
             ? $criteria->offset() + \count($ids) < $total
             : \count($ids) > $criteria->limit;
@@ -136,6 +242,25 @@ final class WorkSearch
         if ($overfetch > 0) {
             $ids = \array_slice($ids, 0, $criteria->limit);
         }
+
+        return $this->result($criteria, $ids, $total, $exact, $hasMore, $withSuggestion);
+    }
+
+    /**
+     * The reply, once the two paths above have each worked out their own count.
+     *
+     * @param list<int> $ids
+     *
+     * @return array<string, mixed>
+     */
+    private function result(
+        SearchCriteria $criteria,
+        array $ids,
+        ?int $total,
+        bool $exact,
+        bool $hasMore,
+        bool $withSuggestion,
+    ): array {
 
         // Nothing matched? Offer the closest spelling we know, and say how many
         // rows it would return, so the UI can decide whether to lead with it.
@@ -167,12 +292,155 @@ final class WorkSearch
      */
     public function facets(SearchCriteria $criteria): array
     {
-        return [
-            'types' => $this->typeFacet($criteria->without('type')),
-            'genres' => $this->genreFacet($criteria->without('genre')),
-            'countries' => $this->countryFacet($criteria->without('country')),
-            'decades' => $this->decadeFacet($criteria->without('year')),
+        /*
+         * Each facet drops its own filter — the type counts are what you would
+         * get if you changed type, not what you have already narrowed to — so
+         * the four do not always share a WHERE and cannot always share a scan.
+         *
+         * They usually do, though. With no type, genre, country or year filter
+         * set, all four without() calls give back the same criteria, and the
+         * four queries were four identical scans of the same thousand rows.
+         * Measured on the server for q=love: 103ms + 746ms + 244ms + the
+         * decades, against one scan feeding all four.
+         *
+         * So they are grouped by the WHERE they actually produce, and each
+         * distinct group is one query. No filters is one query; a type filter
+         * makes it two; every filter at once falls back to what it did before.
+         */
+        $wanted = [
+            'types' => $criteria->without('type'),
+            'genres' => $criteria->without('genre'),
+            'countries' => $criteria->without('country'),
+            'decades' => $criteria->without('year'),
         ];
+
+        /** @var array<string, array{criteria: SearchCriteria, names: list<string>}> $groups */
+        $groups = [];
+        foreach ($wanted as $name => $each) {
+            [$where, $params] = $this->conditions($each);
+            $key = $where.'|'.serialize($params);
+
+            $groups[$key]['criteria'] ??= $each;
+            $groups[$key]['names'][] = $name;
+        }
+
+        $out = [];
+        foreach ($groups as $group) {
+            $out += $this->facetGroup($group['names'], $group['criteria']);
+        }
+
+        // Back into the order the client expects, whatever order they were
+        // computed in.
+        return [
+            'types' => $out['types'],
+            'genres' => $out['genres'],
+            'countries' => $out['countries'],
+            'decades' => $out['decades'],
+        ];
+    }
+
+    /**
+     * Several facets over one sample, in one round trip.
+     *
+     * The sample is a MATERIALIZED CTE precisely so Postgres computes it once
+     * and every aggregate below reads the result. Without the keyword it is
+     * free to inline the subquery into each branch, which is the four scans
+     * this exists to stop.
+     *
+     * @param list<string> $names
+     *
+     * @return array<string, mixed>
+     */
+    private function facetGroup(array $names, SearchCriteria $criteria): array
+    {
+        [$where, $params, $types] = $this->conditions($criteria);
+        $sample = $this->sampleSql($criteria, $where, $params);
+        $types['sample'] = ParameterType::INTEGER;
+
+        $selects = [];
+
+        foreach ($names as $name) {
+            $selects[] = match ($name) {
+                'types' => "(SELECT json_agg(json_build_object('type', t.type, 'n', t.n))
+                             FROM (SELECT w.type, COUNT(*) AS n FROM sample w GROUP BY w.type) t) AS types",
+                'genres' => "(SELECT json_agg(json_build_object('slug', g.slug, 'name', g.name, 'n', g.n))
+                             FROM (SELECT fg.slug, fg.name, COUNT(*) AS n
+                                   FROM sample w
+                                   JOIN work_genre fwg ON fwg.work_id = w.id
+                                   JOIN genres fg ON fg.id = fwg.genre_id
+                                   GROUP BY fg.slug, fg.name
+                                   ORDER BY n DESC, fg.name ASC
+                                   LIMIT 24) g) AS genres",
+                'countries' => "(SELECT json_agg(json_build_object('code', c.value, 'n', c.n))
+                                 FROM (SELECT wt.value, COUNT(*) AS n
+                                       FROM sample w
+                                       JOIN work_tag wt ON wt.work_id = w.id AND wt.kind = :countryKind
+                                       GROUP BY wt.value
+                                       ORDER BY n DESC, wt.value ASC
+                                       LIMIT 24) c) AS countries",
+                'decades' => "(SELECT json_agg(json_build_object('decade', d.decade, 'n', d.n))
+                               FROM (SELECT (w.year / 10) * 10 AS decade, COUNT(*) AS n
+                                     FROM sample w WHERE w.year IS NOT NULL
+                                     GROUP BY decade ORDER BY decade DESC) d) AS decades",
+                default => throw new \InvalidArgumentException('Unknown facet: '.$name),
+            };
+        }
+
+        if (\in_array('countries', $names, true)) {
+            $params['countryKind'] = self::TAG_COUNTRY;
+        }
+
+        $row = $this->connection()->executeQuery(
+            'WITH sample AS MATERIALIZED ('.$sample.') SELECT '.implode(', ', $selects),
+            $params,
+            $types,
+        )->fetchAssociative() ?: [];
+
+        $out = [];
+
+        foreach ($names as $name) {
+            /** @var list<array<string, mixed>> $rows */
+            $rows = json_decode((string) ($row[$name] ?? 'null'), true) ?? [];
+
+            $out[$name] = match ($name) {
+                'types' => $this->typeCounts($rows),
+                'genres' => array_map(static fn (array $r) => [
+                    'slug' => (string) $r['slug'],
+                    'name' => (string) $r['name'],
+                    'count' => (int) $r['n'],
+                ], $rows),
+                'countries' => array_map(static fn (array $r) => [
+                    'code' => (string) $r['code'],
+                    'count' => (int) $r['n'],
+                ], $rows),
+                'decades' => array_map(static fn (array $r) => [
+                    'decade' => (int) $r['decade'],
+                    'count' => (int) $r['n'],
+                ], $rows),
+                default => [],
+            };
+        }
+
+        return $out;
+    }
+
+    /**
+     * Every type present with a zero, so the filter draws the same four rows
+     * whether or not the search happened to match any of them.
+     *
+     * @param list<array<string, mixed>> $rows
+     *
+     * @return array<string, int>
+     */
+    private function typeCounts(array $rows): array
+    {
+        $counts = array_fill_keys(Work::TYPES, 0);
+
+        foreach ($rows as $row) {
+            $counts[(string) $row['type']] = (int) $row['n'];
+        }
+
+        return $counts;
     }
 
     /**
@@ -352,7 +620,10 @@ final class WorkSearch
      * @param array<string, mixed>            $params
      * @param array<string, ParameterType|ArrayParameterType|int> $types
      *
-     * @return list<int>
+     * @return array{0: list<int>, 1: int|null} the page, and how many matches
+     *                                          the relevance pool held — null
+     *                                          when this sort has no pool and
+     *                                          therefore counted nothing
      */
     private function ids(SearchCriteria $criteria, string $where, array $params, array $types, int $extra = 0): array
     {
@@ -402,7 +673,8 @@ final class WorkSearch
         if (!$this->ranksByRelevance($criteria)) {
             $rows = $this->connection()->executeQuery($sql, $params, $types)->fetchFirstColumn();
 
-            return array_map('intval', $rows);
+            // No pool, so nothing counted anything along the way.
+            return [array_map('intval', $rows), null];
         }
 
         /*
@@ -435,10 +707,10 @@ final class WorkSearch
          */
         [$ids, $filled] = $this->pooled($criteria, $where, $params, $types, $order, $pool, true);
         if ($filled >= $pool) {
-            return $ids;
+            return [$ids, $filled];
         }
 
-        return $this->pooled($criteria, $where, $params, $types, $order, $pool, false)[0];
+        return $this->pooled($criteria, $where, $params, $types, $order, $pool, false);
     }
 
     /**
@@ -628,6 +900,16 @@ final class WorkSearch
         $clauses = ['w.deleted_at IS NULL'];
         $params = [];
         $types = [];
+
+        /*
+         * A genre that holds nothing of the type being asked for — see
+         * genreTypes(). Answered here rather than at the controller so the
+         * count, the id list, the facets and the suggestion all agree, and so
+         * no caller can forget to ask.
+         */
+        if (!$this->combinationIsPossible($criteria)) {
+            return ['FALSE', [], []];
+        }
 
         if ($criteria->hasQuery()) {
             $query = (string) $criteria->query;
@@ -881,126 +1163,6 @@ final class WorkSearch
                 LIMIT :sample';
     }
 
-    /**
-     * @return array<string, int>
-     */
-    private function typeFacet(SearchCriteria $criteria): array
-    {
-        [$where, $params, $types] = $this->conditions($criteria);
-        $sample = $this->sampleSql($criteria, $where, $params);
-        $types['sample'] = ParameterType::INTEGER;
-
-        $rows = $this->connection()->executeQuery(
-            'SELECT w.type, COUNT(*) AS n FROM ('.$sample.') w GROUP BY w.type',
-            $params,
-            $types,
-        )->fetchAllAssociative();
-
-        $counts = array_fill_keys(Work::TYPES, 0);
-        foreach ($rows as $row) {
-            $counts[(string) $row['type']] = (int) $row['n'];
-        }
-
-        return $counts;
-    }
-
-    /**
-     * @return list<array{slug: string, name: string, count: int}>
-     */
-    /**
-     * Which countries the current result set actually contains, with counts.
-     *
-     * The whole reason countries became rows rather than a jsonb column: a
-     * chip that cannot say how many are behind it is half a filter, and
-     * counting inside jsonb means unnesting an array per matching row with no
-     * index able to help. Here it is a GROUP BY over (kind, value, work_id).
-     *
-     * @return list<array{code: string, count: int}>
-     */
-    private function countryFacet(SearchCriteria $criteria): array
-    {
-        [$where, $params, $types] = $this->conditions($criteria);
-
-        $sample = $this->sampleSql($criteria, $where, $params);
-        $types['sample'] = ParameterType::INTEGER;
-        $params['countryKind'] = self::TAG_COUNTRY;
-
-        $rows = $this->connection()->executeQuery(
-            'SELECT wt.value AS code, COUNT(*) AS n
-             FROM ('.$sample.') w
-             JOIN work_tag wt ON wt.work_id = w.id AND wt.kind = :countryKind
-             GROUP BY wt.value
-             ORDER BY n DESC, wt.value ASC
-             LIMIT 24',
-            $params,
-            $types,
-        )->fetchAllAssociative();
-
-        return array_map(static fn (array $row) => [
-            'code' => (string) $row['code'],
-            'count' => (int) $row['n'],
-        ], $rows);
-    }
-
-    private function genreFacet(SearchCriteria $criteria): array
-    {
-        [$where, $params, $types] = $this->conditions($criteria);
-
-        /*
-         * This one does join genres — it is grouping by them — but it still
-         * counts plainly. work_genre is keyed on (work_id, genre_id), so a
-         * work appears at most once per genre and no group can see it twice:
-         * 575,109 rows, 575,109 distinct pairs. COUNT(DISTINCT) made Postgres
-         * sort every one of them by (slug, work_id) to prove what the primary
-         * key already guarantees.
-         */
-        $sample = $this->sampleSql($criteria, $where, $params);
-        $types['sample'] = ParameterType::INTEGER;
-
-        $rows = $this->connection()->executeQuery(
-            'SELECT fg.slug, fg.name, COUNT(*) AS n
-             FROM ('.$sample.') w
-             JOIN work_genre fwg ON fwg.work_id = w.id
-             JOIN genres fg ON fg.id = fwg.genre_id
-             GROUP BY fg.slug, fg.name
-             ORDER BY n DESC, fg.name ASC
-             LIMIT 24',
-            $params,
-            $types,
-        )->fetchAllAssociative();
-
-        return array_map(static fn (array $row) => [
-            'slug' => (string) $row['slug'],
-            'name' => (string) $row['name'],
-            'count' => (int) $row['n'],
-        ], $rows);
-    }
-
-    /**
-     * @return list<array{decade: int, count: int}>
-     */
-    private function decadeFacet(SearchCriteria $criteria): array
-    {
-        [$where, $params, $types] = $this->conditions($criteria);
-
-        $sample = $this->sampleSql($criteria, $where, $params);
-        $types['sample'] = ParameterType::INTEGER;
-
-        $rows = $this->connection()->executeQuery(
-            'SELECT (w.year / 10) * 10 AS decade, COUNT(*) AS n
-             FROM ('.$sample.') w
-             WHERE w.year IS NOT NULL
-             GROUP BY decade
-             ORDER BY decade DESC',
-            $params,
-            $types,
-        )->fetchAllAssociative();
-
-        return array_map(static fn (array $row) => [
-            'decade' => (int) $row['decade'],
-            'count' => (int) $row['n'],
-        ], $rows);
-    }
 
     /**
      * Ids back to entities, in the order the search returned them.

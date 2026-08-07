@@ -149,16 +149,48 @@ class WorkController extends AbstractController
      * draw everything above it without waiting on this.
      */
     #[Route('/api/items/{type}/{slug}/related', name: 'api_items_related', methods: ['GET'], requirements: ['type' => 'movie|series|game|book'])]
-    public function related(string $type, string $slug, Request $request): JsonResponse
+    public function related(string $type, string $slug, Request $request, WorkHydrator $hydrator): JsonResponse
     {
         $work = $this->requireWork($type, $slug);
+        $limit = min(24, max(1, $request->query->getInt('limit', 8)));
+
+        /*
+         * TMDB's own answer first.
+         *
+         * The crawl has been storing similar and recommended titles per work
+         * all along and nothing read them; the genre search below was standing
+         * in for data we already had. It stays as the fallback, because a title
+         * the details backfill has not reached has no rows in work_related and
+         * "popular in the same genres" beats an empty rail.
+         */
+        $relatedIds = $this->works->relatedIds((int) $work->getId(), $limit);
+
+        if ([] !== $relatedIds) {
+            $byId = [];
+            foreach ($this->works->findBy(['id' => $relatedIds]) as $other) {
+                $byId[(int) $other->getId()] = $other;
+            }
+
+            // TMDB's ranking is the whole value here, and findBy returns rows
+            // in whatever order it likes, so the id order is reapplied.
+            $ordered = array_values(array_filter(array_map(
+                static fn (int $id) => $byId[$id] ?? null,
+                $relatedIds,
+            )));
+
+            // One query for the scores rather than one per card.
+            $hydrator->preloadIds($relatedIds, [WorkHydrator::RATINGS]);
+
+            return $this->json([
+                'items' => array_map(fn ($other) => $this->presenter->listItem($other), $ordered),
+            ]);
+        }
+
         $genres = $work->getGenreSlugs();
 
         if ([] === $genres) {
             return $this->json(['items' => []]);
         }
-
-        $limit = min(24, max(1, $request->query->getInt('limit', 8)));
 
         $criteria = new SearchCriteria(
             types: [$type],

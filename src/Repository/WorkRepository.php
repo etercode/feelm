@@ -352,6 +352,49 @@ class WorkRepository extends ServiceEntityRepository
     }
 
     /**
+     * What TMDB says is like this title, resolved to works we actually hold.
+     *
+     * WorkDetailsWriter has been filling work_related since the details
+     * backfill — twenty-four rows a title, "similar" and "recommended" — and
+     * until now nothing read a single one of them. The /related endpoint was
+     * answering with "popular titles sharing a genre", which is a reasonable
+     * guess and a much worse answer than the one we already had stored.
+     *
+     * Recommended before similar: TMDB derives the first from what people went
+     * on to watch and the second from shared keywords and genres, and the two
+     * disagree usefully. Position within a kind is TMDB's own ranking.
+     *
+     * The join through external_ids is why work_related holds their id rather
+     * than ours — see the entity. A pointer to a title we never crawled finds
+     * nothing here and the list simply comes back shorter.
+     *
+     * @return list<int>
+     */
+    public function relatedIds(int $workId, int $limit): array
+    {
+        $rows = $this->getEntityManager()->getConnection()->executeQuery(
+            "SELECT w.id
+               FROM work_related r
+               JOIN external_ids x ON x.source = 'tmdb' AND x.external_id = r.tmdb_id::text
+               JOIN works w ON w.id = x.work_id
+              WHERE r.work_id = :work
+                AND w.deleted_at IS NULL
+                AND w.id <> :work
+              ORDER BY CASE WHEN r.kind = 'recommended' THEN 0 ELSE 1 END,
+                       r.position,
+                       w.popularity DESC NULLS LAST
+              LIMIT :limit",
+            ['work' => $workId, 'limit' => $limit],
+            ['work' => ParameterType::INTEGER, 'limit' => ParameterType::INTEGER],
+        )->fetchFirstColumn();
+
+        // A title can be both similar and recommended; the ordering above puts
+        // the recommended copy first, so keeping the first occurrence keeps the
+        // better ranking.
+        return array_values(array_unique(array_map('intval', $rows)));
+    }
+
+    /**
      * The countries worth offering in a filter, commonest first.
      *
      * Straight off work_tag's (kind, value, work_id) index — a grouped count

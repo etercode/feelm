@@ -186,6 +186,11 @@ class WorkRepository extends ServiceEntityRepository
                 SELECT id FROM works
                 WHERE deleted_at IS NULL
                   AND poster IS NOT NULL
+                  -- The hero is a plate that plays a trailer. A release with
+                  -- none is a still image sitting where a video should be, and
+                  -- the queue beside it advances by playing them in turn — so
+                  -- one without a trailer is both a dead plate and a dead stop.
+                  AND trailer IS NOT NULL
                   AND release_date > CURRENT_DATE
                   -- A horizon, because TMDB carries placeholders years out —
                   -- sequels with a year and nothing else — and those are

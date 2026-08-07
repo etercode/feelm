@@ -68,11 +68,16 @@ final class WorkSearch
     private array $fuzzy = [];
 
     /**
-     * How long the genre/type map is held. It only changes when the crawl
-     * gives a genre its first title of a kind it had none of, which is a thing
-     * that happens once per genre in the life of the catalogue.
+     * How long the genre/type map is held.
+     *
+     * A day, not an hour, and warmed by the nightly run — see warmGenreTypes().
+     * Building it is a DISTINCT across every work_genre row, two seconds on the
+     * server, and an hourly expiry means one unlucky visitor an hour waits for
+     * it. It only changes when the crawl gives a genre its first title of a
+     * kind it had none of, which happens about once per genre in the life of
+     * the catalogue, so an hour was never buying anything.
      */
-    private const PAIRS_CACHE_SECONDS = 3600;
+    private const PAIRS_CACHE_SECONDS = 86400;
 
     public function __construct(
         private readonly EntityManagerInterface $entityManager,
@@ -104,6 +109,20 @@ final class WorkSearch
      *
      * @return array<string, list<string>> genre slug => the types it appears in
      */
+    /**
+     * Rebuild the genre/type map now, so no visitor is the one who pays for it.
+     *
+     * Called from the nightly, after the crawls that could have changed it.
+     *
+     * @return int how many genre/type pairs exist
+     */
+    public function warmGenreTypes(): int
+    {
+        $this->cache->delete('search.genre_types');
+
+        return array_sum(array_map('count', $this->genreTypes()));
+    }
+
     private function genreTypes(): array
     {
         return $this->cache->get('search.genre_types', function (ItemInterface $item): array {

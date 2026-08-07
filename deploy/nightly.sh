@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# The nightly catalogue update. One cron entry, four jobs, in order.
+# The nightly catalogue update. One cron entry, eight jobs, in order.
 #
 #   0 2 * * * /opt/feelm/deploy/nightly.sh
 #
@@ -123,11 +123,20 @@ run "details" php bin/console app:catalog:backfill-details --limit=2000 --concur
 # popular, not a queue being worked through.
 run "artwork" php bin/console app:catalog:mirror-media --limit=3000 --posters-only
 
+# Last, because it summarises what everything above just changed.
+#
+# Search checks a genre/type map before running a combination that cannot match
+# — asking for a television genre with type=movie used to walk all 1.2M films to
+# return nothing. Building that map is a DISTINCT over every work_genre row, two
+# seconds, and without this it gets built by whichever visitor arrives first
+# after it expires. Cheap here, invisible there.
+run "search cache" php bin/console app:search:warm
+
 say "===== nightly end"
 
 if [ -n "$FAILURES" ]; then
     notify "Nightly run finished with failures" --fail \
         --fact="Failed=${FAILURES# }" --fact="Took=$((SECONDS / 60))m"
 else
-    notify "Nightly run finished" --fact="Jobs=7" --fact="Took=$((SECONDS / 60))m"
+    notify "Nightly run finished" --fact="Jobs=8" --fact="Took=$((SECONDS / 60))m"
 fi

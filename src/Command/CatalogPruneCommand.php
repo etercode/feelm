@@ -11,23 +11,29 @@ use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
 /**
- * Hides the titles that can never render.
+ * Hides titles in bulk, by rule.
  *
- * ---- what it takes and why that is safe --------------------------------------
+ * ---- blank -------------------------------------------------------------------
  *
  * No artwork, and nobody has ever rated it. A row like that cannot draw a
  * poster card, so the only place it can appear is as an empty box at the bottom
- * of a search — it is weight in every index and every count, and shows nothing
- * to anybody. 224,918 films are in that state.
+ * of a search — weight in every index and every count, showing nothing to
+ * anybody. 224,918 films were in that state and are now hidden.
  *
- * Deliberately *not* "has no IMDb id", which was the other candidate. That rule
- * would have taken 550,101 films, a third of which we simply never asked TMDB
- * about — IMDb ids arrive with the details backfill and 193,911 of them have
- * never been through it, so their missing id is our gap rather than their
- * absence. It would also have taken The Death and Return of Superman, Hulk vs.
- * Wolverine and a BTS concert film, none of which IMDb indexes the way TMDB
- * does. Votes and artwork are facts about the row in front of us; an IMDb id is
- * a fact about how far our own crawl got.
+ * ---- no-imdb -----------------------------------------------------------------
+ *
+ * TMDB holds no IMDb id for it. A blunter rule, and it is worth being honest
+ * about what it costs: it takes The Death and Return of Superman, Hulk vs.
+ * Wolverine, a BTS concert film and every Golden Globes ceremony, because IMDb
+ * does not index direct-to-video, TV specials and award shows the way TMDB
+ * does. It also does nothing for adult content, which was the question that
+ * first raised it — adult titles are *less* likely to be missing an IMDb id
+ * (34.7%) than the catalogue average (45.4%).
+ *
+ * It is a catalogue-size decision, not a quality signal, and it is the
+ * operator's to make. See predicate() for the one part of it that is not a
+ * judgement call but a mistake: a title whose details were never fetched has no
+ * IMDb id because nobody asked.
  *
  * ---- reversible ---------------------------------------------------------------
  *
@@ -37,7 +43,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
  */
 #[AsCommand(
     name: 'app:catalog:prune',
-    description: 'Hide titles with no artwork and no ratings',
+    description: 'Hide titles in bulk by rule (blank | no-imdb)',
 )]
 final class CatalogPruneCommand extends Command
 {
@@ -58,9 +64,11 @@ final class CatalogPruneCommand extends Command
     protected function configure(): void
     {
         $this
+            ->addOption('rule', null, InputOption::VALUE_REQUIRED, 'blank (no art, no votes) or no-imdb', 'blank')
             ->addOption('apply', null, InputOption::VALUE_NONE, 'Actually hide them; without this it only counts')
             ->addOption('restore', null, InputOption::VALUE_NONE, 'Undo a previous run')
             ->addOption('type', null, InputOption::VALUE_REQUIRED, 'Restrict to one type', 'movie')
+            ->addOption('include-unchecked', null, InputOption::VALUE_NONE, 'no-imdb only: also take titles whose details were never fetched')
             ->addOption('limit', null, InputOption::VALUE_REQUIRED, 'Stop after this many rows');
     }
 
@@ -68,17 +76,27 @@ final class CatalogPruneCommand extends Command
     {
         $io = new SymfonyStyle($input, $output);
         $type = (string) $input->getOption('type');
+        $rule = (string) $input->getOption('rule');
+        $unchecked = (bool) $input->getOption('include-unchecked');
         $limit = $input->getOption('limit');
         $limit = null === $limit ? null : max(1, (int) $limit);
 
-        if ($input->getOption('restore')) {
-            return $this->restore($io, $type);
+        try {
+            $where = $this->predicate($rule, $unchecked);
+        } catch (\InvalidArgumentException $e) {
+            $io->error($e->getMessage());
+
+            return Command::INVALID;
         }
 
-        $io->title('Pruning '.$type.'s with no artwork and no ratings');
+        if ($input->getOption('restore')) {
+            return $this->restore($io, $type, $where);
+        }
+
+        $io->title(sprintf('Pruning %ss by rule "%s"', $type, $rule));
 
         $matching = (int) $this->connection->fetchOne(
-            'SELECT COUNT(*) FROM works WHERE '.self::PREDICATE,
+            'SELECT COUNT(*) FROM works WHERE '.$where,
             ['type' => $type],
         );
 
@@ -86,7 +104,7 @@ final class CatalogPruneCommand extends Command
 
         if (!$input->getOption('apply')) {
             $io->warning('Dry run. Nothing changed — pass --apply to commit.');
-            $this->sample($io, $type);
+            $this->sample($io, $type, $where);
 
             return Command::SUCCESS;
         }
@@ -104,7 +122,7 @@ final class CatalogPruneCommand extends Command
 
             $done = (int) $this->connection->executeStatement(
                 'UPDATE works SET deleted_at = NOW()
-                  WHERE id IN (SELECT id FROM works WHERE '.self::PREDICATE.' LIMIT '.$take.')',
+                  WHERE id IN (SELECT id FROM works WHERE '.$where.' LIMIT '.$take.')',
                 ['type' => $type],
             );
 
@@ -127,18 +145,39 @@ final class CatalogPruneCommand extends Command
     }
 
     /**
-     * The rule, written once.
+     * The rules, each written once so the count, the sample, the update and the
+     * restore cannot disagree about what they are acting on.
      *
-     * `poster IS NULL` rather than "no mirror": the mirror only ever runs on
-     * rows that had a TMDB URL, so a row with no poster column never had
-     * artwork to begin with.
+     * `blank` — no artwork and no ratings. `poster IS NULL` rather than "no
+     * mirror": the mirror only ever runs on rows that had a TMDB URL, so a row
+     * with no poster column never had artwork to begin with.
+     *
+     * `no-imdb` — TMDB holds no IMDb id for it.
+     *
+     * ---- the trap in no-imdb -----------------------------------------------
+     *
+     * An IMDb id arrives with the details backfill. A title that has never been
+     * through it has no id because *we never asked*, not because IMDb has no
+     * entry — and on production that is 113,014 titles. Deleting those is
+     * deleting on missing data, so `details_synced_at IS NOT NULL` is part of
+     * the rule and --include-unchecked is what removes it.
      */
-    private const PREDICATE = "type = :type
-              AND deleted_at IS NULL
-              AND poster IS NULL
-              AND COALESCE(vote_count, 0) = 0";
+    private function predicate(string $rule, bool $includeUnchecked): string
+    {
+        $base = 'type = :type AND deleted_at IS NULL';
 
-    private function restore(SymfonyStyle $io, string $type): int
+        return match ($rule) {
+            'blank' => $base." AND poster IS NULL AND COALESCE(vote_count, 0) = 0",
+            'no-imdb' => $base
+                .($includeUnchecked ? '' : ' AND details_synced_at IS NOT NULL')
+                ." AND NOT EXISTS (
+                    SELECT 1 FROM external_ids x WHERE x.work_id = works.id AND x.source = 'imdb'
+                  )",
+            default => throw new \InvalidArgumentException('Unknown rule: '.$rule),
+        };
+    }
+
+    private function restore(SymfonyStyle $io, string $type, string $where): int
     {
         /*
          * Only rows this command could have hidden. A title hidden by a
@@ -147,12 +186,8 @@ final class CatalogPruneCommand extends Command
          * excluded, and anything with artwork is too.
          */
         $back = (int) $this->connection->executeStatement(
-            'UPDATE works SET deleted_at = NULL
-              WHERE type = :type
-                AND deleted_at IS NOT NULL
-                AND adult = FALSE
-                AND poster IS NULL
-                AND COALESCE(vote_count, 0) = 0',
+            'UPDATE works SET deleted_at = NULL WHERE adult = FALSE AND '
+                .str_replace('deleted_at IS NULL', 'deleted_at IS NOT NULL', $where),
             ['type' => $type],
         );
 
@@ -162,11 +197,11 @@ final class CatalogPruneCommand extends Command
     }
 
     /** A look at what the rule actually catches, before it is trusted with it. */
-    private function sample(SymfonyStyle $io, string $type): void
+    private function sample(SymfonyStyle $io, string $type, string $where): void
     {
         $rows = $this->connection->fetchAllAssociative(
             'SELECT title, year, popularity FROM works
-              WHERE '.self::PREDICATE.'
+              WHERE '.$where.'
               ORDER BY popularity DESC NULLS LAST
               LIMIT 10',
             ['type' => $type],

@@ -108,36 +108,39 @@ final class CatalogPurgeMediaCommand extends Command
                 break;
             }
 
+            $keys = [];
+            $ids = [];
+
             foreach ($rows as $row) {
+                $ids[] = (int) $row['id'];
                 foreach (['poster_mirror', 'backdrop_mirror'] as $column) {
                     $key = $row[$column] ?? null;
-                    if (null === $key || '' === $key) {
-                        continue;
-                    }
-
-                    try {
-                        $this->storage->delete((string) $key);
-                        ++$deleted;
-                    } catch (\Throwable $e) {
-                        // A key already gone is the same outcome we wanted, and
-                        // the column is cleared either way — leaving it set
-                        // would mean serving a URL to an object that is not
-                        // there, which is worse than losing the record of it.
-                        ++$failed;
+                    if (null !== $key && '' !== $key) {
+                        $keys[] = (string) $key;
                     }
                 }
-
-                /*
-                 * Cleared after the deletes, per row. If the process dies
-                 * mid-batch the rows it finished are done and the rest are
-                 * still queued — the query above is what makes this resumable,
-                 * so nothing may leave the queue before its objects are gone.
-                 */
-                $this->connection->executeStatement(
-                    'UPDATE works SET poster_mirror = NULL, backdrop_mirror = NULL WHERE id = :id',
-                    ['id' => $row['id']],
-                );
             }
+
+            $gone = $this->storage->deleteMany($keys);
+            $deleted += $gone;
+            $failed += \count($keys) - $gone;
+
+            /*
+             * Cleared after the deletes, never before. If the process dies
+             * mid-run the batch it finished is done and the rest are still
+             * queued — the query above is what makes this resumable, so no row
+             * may leave the queue while its objects are still in the bucket.
+             *
+             * A key that could not be deleted still has its column cleared: it
+             * is almost always one that was already gone, and leaving the
+             * column set would mean serving a URL to an object that is not
+             * there, which is worse than losing the record of it.
+             */
+            $this->connection->executeStatement(
+                'UPDATE works SET poster_mirror = NULL, backdrop_mirror = NULL WHERE id IN (:ids)',
+                ['ids' => $ids],
+                ['ids' => \Doctrine\DBAL\ArrayParameterType::INTEGER],
+            );
 
             $io->writeln(sprintf('  %s deleted…', number_format($deleted)));
         }

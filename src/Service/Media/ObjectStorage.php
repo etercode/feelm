@@ -333,6 +333,59 @@ final class ObjectStorage
         $this->client()->deleteObject(['Bucket' => $bucket ?? $this->bucket, 'Key' => $key]);
     }
 
+    /**
+     * Delete up to a thousand keys in one request.
+     *
+     * One HTTP round trip per image is what made the first artwork purge a
+     * sixty-minute job for six thousand files — nearly all of it latency, since
+     * a delete carries no body. S3 has taken batches since the beginning and
+     * this is what that is for.
+     *
+     * Falls back to deleting one at a time if the bulk call is refused, because
+     * DeleteObjects is the corner of the S3 API that compatible stores are
+     * least reliable about implementing, and a slow purge beats a failed one.
+     *
+     * @param list<string> $keys
+     *
+     * @return int how many were accepted for deletion
+     */
+    public function deleteMany(array $keys, ?string $bucket = null): int
+    {
+        if ([] === $keys) {
+            return 0;
+        }
+
+        $target = $bucket ?? $this->bucket;
+        $deleted = 0;
+
+        foreach (array_chunk($keys, 1000) as $chunk) {
+            try {
+                $result = $this->client()->deleteObjects([
+                    'Bucket' => $target,
+                    'Delete' => [
+                        'Objects' => array_map(static fn (string $key) => ['Key' => $key], $chunk),
+                        // Errors still come back; only the list of successes is
+                        // suppressed, and we count from what was asked for.
+                        'Quiet' => true,
+                    ],
+                ]);
+
+                $deleted += \count($chunk) - \count($result['Errors'] ?? []);
+            } catch (AwsException) {
+                foreach ($chunk as $key) {
+                    try {
+                        $this->delete($key, $target);
+                        ++$deleted;
+                    } catch (AwsException) {
+                        // Already gone is the outcome we wanted anyway.
+                    }
+                }
+            }
+        }
+
+        return $deleted;
+    }
+
     public function exists(string $key): bool
     {
         try {

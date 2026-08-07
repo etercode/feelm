@@ -79,6 +79,24 @@ class EntryRepository extends ServiceEntityRepository
     }
 
     /**
+     * Just the work ids somebody has on a shelf.
+     *
+     * shelfStateForUser() answers the same question with six columns and a
+     * sort, which is the right shape for the library and the wrong one for a
+     * caller that only wants to subtract a set — recommending a film somebody
+     * has already logged is the recommendation nobody needed.
+     *
+     * @return list<int>
+     */
+    public function shelvedWorkIds(User $user): array
+    {
+        return array_map('intval', $this->getEntityManager()->getConnection()->executeQuery(
+            'SELECT work_id FROM entries WHERE user_id = :user',
+            ['user' => $user->getId()],
+        )->fetchFirstColumn());
+    }
+
+    /**
      * @param list<int>|null $userIds
      *
      * @return list<Entry>

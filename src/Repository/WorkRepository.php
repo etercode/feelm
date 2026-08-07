@@ -375,22 +375,51 @@ class WorkRepository extends ServiceEntityRepository
      *
      * @return list<int>
      */
-    public function relatedIds(int $workId, int $limit): array
+    public function relatedIds(int $workId, int $limit, array $exclude = []): array
     {
+        /*
+         * Drawn at random from the ranked pool rather than taken off the top —
+         * the same shape as findUpcoming(), and for the same complaint. TMDB
+         * gives about twenty-four related titles per film and the rail shows
+         * eight, so strictly by rank it was the same eight every visit and the
+         * other sixteen were never seen by anybody. Ranking picks the pool;
+         * chance picks the rail.
+         *
+         * The pool is still ordered before it is cut, so a shuffle can only
+         * ever reach into TMDB's better suggestions.
+         */
         $rows = $this->getEntityManager()->getConnection()->executeQuery(
-            "SELECT w.id
-               FROM work_related r
-               JOIN external_ids x ON x.source = 'tmdb' AND x.external_id = r.tmdb_id::text
-               JOIN works w ON w.id = x.work_id
-              WHERE r.work_id = :work
-                AND w.deleted_at IS NULL
-                AND w.id <> :work
-              ORDER BY CASE WHEN r.kind = 'recommended' THEN 0 ELSE 1 END,
-                       r.position,
-                       w.popularity DESC NULLS LAST
-              LIMIT :limit",
-            ['work' => $workId, 'limit' => $limit],
-            ['work' => ParameterType::INTEGER, 'limit' => ParameterType::INTEGER],
+            "SELECT id FROM (
+                SELECT w.id
+                  FROM work_related r
+                  JOIN external_ids x ON x.source = 'tmdb' AND x.external_id = r.tmdb_id::text
+                  JOIN works w ON w.id = x.work_id
+                 WHERE r.work_id = :work
+                   AND w.deleted_at IS NULL
+                   AND w.id <> :work
+                   AND (:excluded::int[] IS NULL OR NOT (w.id = ANY(:excluded::int[])))
+                 ORDER BY CASE WHEN r.kind = 'recommended' THEN 0 ELSE 1 END,
+                          r.position,
+                          w.popularity DESC NULLS LAST
+                 LIMIT :pool
+             ) ranked
+             ORDER BY random()
+             LIMIT :limit",
+            [
+                'work' => $workId,
+                'limit' => $limit,
+                // Three times what is shown, so there is something to choose
+                // between without reaching the bottom of TMDB's list.
+                'pool' => max($limit * 3, 24),
+                'excluded' => [] === $exclude
+                    ? null
+                    : '{'.implode(',', array_map('intval', $exclude)).'}',
+            ],
+            [
+                'work' => ParameterType::INTEGER,
+                'limit' => ParameterType::INTEGER,
+                'pool' => ParameterType::INTEGER,
+            ],
         )->fetchFirstColumn();
 
         // A title can be both similar and recommended; the ordering above puts

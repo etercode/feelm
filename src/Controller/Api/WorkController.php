@@ -2,9 +2,11 @@
 
 namespace App\Controller\Api;
 
+use App\Entity\User;
 use App\Entity\Work;
 use App\Presenter\ReviewPresenter;
 use App\Presenter\WorkPresenter;
+use App\Repository\EntryRepository;
 use App\Repository\ReviewRepository;
 use App\Repository\WorkRepository;
 use App\Search\SearchCriteria;
@@ -15,6 +17,7 @@ use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\Security\Http\Attribute\CurrentUser;
 
 /**
  * The catalog resource. Still published under /api/items — that is the shape
@@ -149,10 +152,25 @@ class WorkController extends AbstractController
      * draw everything above it without waiting on this.
      */
     #[Route('/api/items/{type}/{slug}/related', name: 'api_items_related', methods: ['GET'], requirements: ['type' => 'movie|series|game|book'])]
-    public function related(string $type, string $slug, Request $request, WorkHydrator $hydrator): JsonResponse
-    {
+    public function related(
+        string $type,
+        string $slug,
+        Request $request,
+        WorkHydrator $hydrator,
+        EntryRepository $entries,
+        #[CurrentUser] ?User $user = null,
+    ): JsonResponse {
         $work = $this->requireWork($type, $slug);
         $limit = min(24, max(1, $request->query->getInt('limit', 8)));
+
+        /*
+         * What is already on your shelf is not a recommendation.
+         *
+         * Optional because this endpoint is public — a signed-out visitor gets
+         * the unfiltered rail, which is the right answer for somebody with no
+         * shelf to subtract.
+         */
+        $seen = null === $user ? [] : $entries->shelvedWorkIds($user);
 
         /*
          * TMDB's own answer first.
@@ -163,7 +181,7 @@ class WorkController extends AbstractController
          * the details backfill has not reached has no rows in work_related and
          * "popular in the same genres" beats an empty rail.
          */
-        $relatedIds = $this->works->relatedIds((int) $work->getId(), $limit);
+        $relatedIds = $this->works->relatedIds((int) $work->getId(), $limit, $seen);
 
         if ([] !== $relatedIds) {
             $byId = [];

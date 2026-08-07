@@ -32,6 +32,16 @@ use Symfony\Component\Console\Style\SymfonyStyle;
  * propagation approach through performers and studios is the accurate tool and
  * this is the blunt one.
  *
+ * ---- obscure -----------------------------------------------------------------
+ *
+ * The rule that reflects what this application is. It is not a complete index of
+ * cinema — it is the popular and the classic — so this is written as the
+ * negation of a keep rule: a title stays if it has an audience on TMDB, or an
+ * audience on IMDb, or people looking at it now, or is too new to have gathered
+ * any of the three.
+ *
+ * Reading both vote sources is the part that matters. See predicate().
+ *
  * ---- no-imdb -----------------------------------------------------------------
  *
  * TMDB holds no IMDb id for it. A blunter rule, and it is worth being honest
@@ -55,7 +65,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
  */
 #[AsCommand(
     name: 'app:catalog:prune',
-    description: 'Hide titles in bulk by rule (blank | unrated | no-imdb)',
+    description: 'Hide titles in bulk by rule (blank | unrated | obscure | no-imdb)',
 )]
 final class CatalogPruneCommand extends Command
 {
@@ -76,7 +86,7 @@ final class CatalogPruneCommand extends Command
     protected function configure(): void
     {
         $this
-            ->addOption('rule', null, InputOption::VALUE_REQUIRED, 'blank, unrated or no-imdb', 'blank')
+            ->addOption('rule', null, InputOption::VALUE_REQUIRED, 'blank, unrated, obscure or no-imdb', 'blank')
             ->addOption('apply', null, InputOption::VALUE_NONE, 'Actually hide them; without this it only counts')
             ->addOption('restore', null, InputOption::VALUE_NONE, 'Undo a previous run')
             ->addOption('type', null, InputOption::VALUE_REQUIRED, 'Restrict to one type', 'movie')
@@ -196,6 +206,41 @@ final class CatalogPruneCommand extends Command
              * one signal that also means "not out yet".
              */
             'unrated' => $base.' AND COALESCE(vote_count, 0) = 0 AND COALESCE(popularity, 0) < 1',
+
+            /*
+             * Nobody, anywhere, has an audience for it.
+             *
+             * Written as the negation of a keep rule, because that is how the
+             * decision was actually made: this application is not a complete
+             * index of cinema, it is the popular and the classic, and the
+             * question is what earns a place rather than what deserves removal.
+             * A title stays if any one of four things is true.
+             *
+             *   TMDB votes >= 50     an audience here
+             *   IMDb votes >= 100    an audience somewhere
+             *   popularity >= 10     people are looking right now
+             *   released < 180d ago  too new to have gathered either
+             *
+             * Both vote sources, and that is the important part. TMDB's counts
+             * are heavily Western-skewed: Reis carries 46 TMDB votes and 74,719
+             * IMDb ones, Dhindora 15 against 126,770. A TMDB-only rule deleted
+             * 510 titles with more than ten thousand IMDb votes, most of them
+             * Indian and Turkish. Pornography has no votes on either service, so
+             * reading both costs nothing where it matters and rescues an entire
+             * film industry where it does.
+             *
+             * The date clause covers upcoming and just-released together. "In
+             * the future" alone is not enough — a film out last month has no
+             * votes yet either, and 10,544 of them would have gone.
+             */
+            'obscure' => $base."
+                AND COALESCE(vote_count, 0) < 50
+                AND COALESCE(popularity, 0) < 10
+                AND (release_date IS NULL OR release_date <= CURRENT_DATE - INTERVAL '180 days')
+                AND NOT EXISTS (
+                    SELECT 1 FROM work_ratings r
+                     WHERE r.work_id = works.id AND r.source = 'imdb' AND r.votes >= 100
+                )",
             'no-imdb' => $base
                 .($includeUnchecked ? '' : ' AND details_synced_at IS NOT NULL')
                 ." AND NOT EXISTS (

@@ -65,7 +65,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
  */
 #[AsCommand(
     name: 'app:catalog:prune',
-    description: 'Hide titles in bulk by rule (blank | unrated | obscure | lowrated | pre1980 | no-imdb)',
+    description: 'Hide titles in bulk by rule (blank | unrated | obscure | lowrated | pre1980 | mediocre | explicit | no-imdb)',
 )]
 final class CatalogPruneCommand extends Command
 {
@@ -86,7 +86,7 @@ final class CatalogPruneCommand extends Command
     protected function configure(): void
     {
         $this
-            ->addOption('rule', null, InputOption::VALUE_REQUIRED, 'blank, unrated, obscure, lowrated, pre1980 or no-imdb', 'blank')
+            ->addOption('rule', null, InputOption::VALUE_REQUIRED, 'blank, unrated, obscure, lowrated, pre1980, mediocre, explicit or no-imdb', 'blank')
             ->addOption('apply', null, InputOption::VALUE_NONE, 'Actually hide them; without this it only counts')
             ->addOption('restore', null, InputOption::VALUE_NONE, 'Undo a previous run')
             ->addOption('type', null, InputOption::VALUE_REQUIRED, 'Restrict to one type', 'movie')
@@ -308,6 +308,58 @@ final class CatalogPruneCommand extends Command
                     SELECT 1 FROM work_ratings r
                      WHERE r.work_id = works.id AND r.source = 'imdb'
                        AND (r.votes >= 5000 OR (r.rating >= 7.0 AND r.votes >= 1000))
+                )",
+
+            /*
+             * Rated middling by the few people who saw it.
+             *
+             * Under 6.0 with fewer than a thousand votes: not bad enough for
+             * `lowrated` and not watched enough to be anyone's answer. The two
+             * conditions carry each other — a 5.5 with two hundred thousand
+             * votes is a film people argue about, and a 7.5 with three hundred
+             * is a small film that found the right audience. Neither is this.
+             *
+             * The two-year clause protects new releases. A film from last year
+             * sitting at 5.8 with four hundred votes has not failed, it has not
+             * finished arriving; votes accumulate for years after release.
+             *
+             * This is the rule that hits non-English film hardest in absolute
+             * terms, and the vote threshold is deliberately low for that reason
+             * — 48% of what it takes is non-English against 45% of the
+             * catalogue, which is as close to proportional as this gets.
+             */
+            'mediocre' => $base."
+                AND (release_date IS NULL OR release_date <= CURRENT_DATE - INTERVAL '2 years')
+                AND EXISTS (
+                    SELECT 1 FROM work_ratings r
+                     WHERE r.work_id = works.id AND r.source = 'imdb'
+                       AND r.rating > 0 AND r.rating < 6.0 AND r.votes < 1000
+                )",
+
+            /*
+             * Explicit by title, and obscure enough that the title means what
+             * it says.
+             *
+             * Matching words in a title is a blunt instrument and the vote
+             * ceiling is what keeps it honest. `Sex Education` carries 401,630
+             * votes, `Sex and the City` 161,602, `sex, lies, and videotape` a
+             * Palme d'Or — all of them cleared by the ceiling, none of them the
+             * thing this rule is for. Below two thousand votes a film called
+             * `Erotic Nightmare` is exactly what it sounds like.
+             *
+             * The overview is deliberately not searched. A film *about* the
+             * pornography industry is not pornography: matching plot text takes
+             * The Big Lebowski, Boogie Nights, Red Rocket, two Louis Theroux
+             * documentaries and Imamura's The Pornographers. Titles only.
+             *
+             * `hardcore` and `playboy` are absent for the same reason — the
+             * first is a punk genre and the second a Hugh Hefner documentary.
+             */
+            'explicit' => $base."
+                AND title ~* '(^|[^a-z])(porn|porno|pornograph[a-z]*|erotic[a-z]*|softcore|sexploitation|nympho[a-z]*|orgy|orgies|kamasutra|emmanuelle|striptease|sex|sexy|sexual)([^a-z]|\\$)'
+                AND NOT EXISTS (
+                    SELECT 1 FROM work_ratings r
+                     WHERE r.work_id = works.id AND r.source = 'imdb' AND r.votes >= 2000
                 )",
 
             'no-imdb' => $base

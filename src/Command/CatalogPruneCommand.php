@@ -356,7 +356,7 @@ final class CatalogPruneCommand extends Command
              * first is a punk genre and the second a Hugh Hefner documentary.
              */
             'explicit' => $base."
-                AND title ~* '(^|[^a-z])(porn|porno|pornograph[a-z]*|erotic[a-z]*|softcore|sexploitation|nympho[a-z]*|orgy|orgies|kamasutra|emmanuelle|striptease|sex|sexy|sexual)([^a-z]|\\$)'
+                AND title ~* '(^|[^a-z])(porn|porno|pornograph[a-z]*|erotic[a-z]*|softcore|sexploitation|nympho[a-z]*|orgy|orgies|kamasutra|emmanuelle|striptease|sex|sexy|sexual)([^a-z]|$)'
                 AND NOT EXISTS (
                     SELECT 1 FROM work_ratings r
                      WHERE r.work_id = works.id AND r.source = 'imdb' AND r.votes >= 2000
@@ -381,7 +381,7 @@ final class CatalogPruneCommand extends Command
              * at the time of writing, and --restore brings back any of them.
              */
             'porn' => $base."
-                AND title ~* '(^|[^a-z])(porn|porno|pornograph[a-z]*|pornucopia)([^a-z]|\\$)'",
+                AND title ~* '(^|[^a-z])(porn|porno|pornograph[a-z]*|pornucopia)([^a-z]|$)'",
 
             'no-imdb' => $base
                 .($includeUnchecked ? '' : ' AND details_synced_at IS NOT NULL')

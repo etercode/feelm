@@ -65,7 +65,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
  */
 #[AsCommand(
     name: 'app:catalog:prune',
-    description: 'Hide titles in bulk by rule (blank | unrated | obscure | no-imdb)',
+    description: 'Hide titles in bulk by rule (blank | unrated | obscure | lowrated | pre1980 | no-imdb)',
 )]
 final class CatalogPruneCommand extends Command
 {
@@ -86,7 +86,7 @@ final class CatalogPruneCommand extends Command
     protected function configure(): void
     {
         $this
-            ->addOption('rule', null, InputOption::VALUE_REQUIRED, 'blank, unrated, obscure or no-imdb', 'blank')
+            ->addOption('rule', null, InputOption::VALUE_REQUIRED, 'blank, unrated, obscure, lowrated, pre1980 or no-imdb', 'blank')
             ->addOption('apply', null, InputOption::VALUE_NONE, 'Actually hide them; without this it only counts')
             ->addOption('restore', null, InputOption::VALUE_NONE, 'Undo a previous run')
             ->addOption('type', null, InputOption::VALUE_REQUIRED, 'Restrict to one type', 'movie')
@@ -241,6 +241,75 @@ final class CatalogPruneCommand extends Command
                     SELECT 1 FROM work_ratings r
                      WHERE r.work_id = works.id AND r.source = 'imdb' AND r.votes >= 100
                 )",
+            /*
+             * Rated, watched enough for the rating to mean something, and bad.
+             *
+             * Three conditions, none of which works alone. `rating < 5` needs a
+             * rating to exist, which is what makes this rule structurally
+             * unable to touch an unreleased film — no votes, no rating, no
+             * match. `votes < 10000` is not a trust bar: 1,000 votes already
+             * gives a stable average, and this number answers a different
+             * question, which is whether enough people know the film that
+             * somebody might come looking for it. Below ten thousand they do
+             * not, and Fifty Shades of Grey (358k votes, 4.2) stays.
+             *
+             * The ten-year clause is the one that is easy to leave out and
+             * should not be. A film released last year with a poor rating and
+             * few votes may simply not have found its audience yet; at ten
+             * years out that question is settled. Without it the rule also
+             * takes seven unreleased titles carrying early festival ratings,
+             * and a rating that will move after release is not one to delete on.
+             *
+             * Measured against production: 22,487 movies, 68% of them English,
+             * and not one shelf entry anywhere on the site.
+             */
+            'lowrated' => $base."
+                AND year < EXTRACT(YEAR FROM CURRENT_DATE) - 10
+                AND EXISTS (
+                    SELECT 1 FROM work_ratings r
+                     WHERE r.work_id = works.id AND r.source = 'imdb'
+                       AND r.rating > 0 AND r.rating < 5 AND r.votes < 10000
+                )",
+
+            /*
+             * Before 1980, keep only what people still watch.
+             *
+             * Written as the negation of a keep rule, like `obscure`, because
+             * the question is what earns its place. A pre-1980 title stays if
+             * either is true:
+             *
+             *   IMDb votes >= 5000                  still watched
+             *   rating >= 7.0 with >= 1000 votes    still admired
+             *
+             * The second clause is not optional. On votes alone at any bar high
+             * enough to matter, the casualties are Kurosawa's Red Beard (8.3),
+             * Bunuel's Los Olvidados (8.2) and Le Trou (8.5) — canonical films
+             * that are simply watched by fewer people than a Hollywood
+             * contemporary. IMDb's electorate is Anglophone: English films
+             * average 10,409 votes against 2,086 for everything else, so a
+             * single vote threshold quietly deletes world cinema for being
+             * foreign. Rating is what rescues it, on merit.
+             *
+             * Popularity is deliberately absent here, and this is the one place
+             * it is wrong to use. For an unreleased film TMDB popularity is the
+             * only signal there is. For a pre-1980 film it measures who is
+             * clicking this week, and among the low-vote titles that is
+             * overwhelmingly softcore — Vixen!, Country Hooker, Carnal
+             * Excitation. A popularity rescue here would preserve precisely the
+             * nude posters this cleanup exists to remove, and would spare 23
+             * films in total doing it.
+             *
+             * 34,958 of 39,800 pre-1980 movies. The Godfather (2.2M votes),
+             * Star Wars (1.6M), 12 Angry Men and Alien are never close.
+             */
+            'pre1980' => $base."
+                AND year < 1980
+                AND NOT EXISTS (
+                    SELECT 1 FROM work_ratings r
+                     WHERE r.work_id = works.id AND r.source = 'imdb'
+                       AND (r.votes >= 5000 OR (r.rating >= 7.0 AND r.votes >= 1000))
+                )",
+
             'no-imdb' => $base
                 .($includeUnchecked ? '' : ' AND details_synced_at IS NOT NULL')
                 ." AND NOT EXISTS (

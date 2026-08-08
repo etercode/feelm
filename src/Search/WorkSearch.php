@@ -307,7 +307,7 @@ final class WorkSearch
      * Counts for the filter panel. Each group is counted with its own filter
      * lifted, which is what lets you see "Drama 412" while Drama is selected.
      *
-     * @return array{types: array<string, int>, genres: list<array{slug: string, name: string, count: int}>, countries: list<array{code: string, count: int}>, decades: list<array{decade: int, count: int}>}
+     * @return array{types: array<string, int>, genres: list<array{slug: string, name: string, count: int}>, countries: list<array{code: string, count: int}>, languages: list<array{code: string, count: int}>, decades: list<array{decade: int, count: int}>}
      */
     public function facets(SearchCriteria $criteria): array
     {
@@ -330,6 +330,7 @@ final class WorkSearch
             'types' => $criteria->without('type'),
             'genres' => $criteria->without('genre'),
             'countries' => $criteria->without('country'),
+            'languages' => $criteria->without('language'),
             'decades' => $criteria->without('year'),
         ];
 
@@ -354,6 +355,7 @@ final class WorkSearch
             'types' => $out['types'],
             'genres' => $out['genres'],
             'countries' => $out['countries'],
+            'languages' => $out['languages'],
             'decades' => $out['decades'],
         ];
     }
@@ -397,6 +399,13 @@ final class WorkSearch
                                        GROUP BY wt.value
                                        ORDER BY n DESC, wt.value ASC
                                        LIMIT 24) c) AS countries",
+                'languages' => "(SELECT json_agg(json_build_object('code', l.original_language, 'n', l.n))
+                                 FROM (SELECT w.original_language, COUNT(*) AS n
+                                       FROM sample w
+                                       WHERE w.original_language IS NOT NULL
+                                       GROUP BY w.original_language
+                                       ORDER BY n DESC, w.original_language ASC
+                                       LIMIT 24) l) AS languages",
                 'decades' => "(SELECT json_agg(json_build_object('decade', d.decade, 'n', d.n))
                                FROM (SELECT (w.year / 10) * 10 AS decade, COUNT(*) AS n
                                      FROM sample w WHERE w.year IS NOT NULL
@@ -429,6 +438,10 @@ final class WorkSearch
                     'count' => (int) $r['n'],
                 ], $rows),
                 'countries' => array_map(static fn (array $r) => [
+                    'code' => (string) $r['code'],
+                    'count' => (int) $r['n'],
+                ], $rows),
+                'languages' => array_map(static fn (array $r) => [
                     'code' => (string) $r['code'],
                     'count' => (int) $r['n'],
                 ], $rows),
@@ -1189,7 +1202,7 @@ final class WorkSearch
          * how much is television — so an arbitrary slice represents it more
          * honestly than the top of it does.
          */
-        return 'SELECT w.id, w.type, w.year
+        return 'SELECT w.id, w.type, w.year, w.original_language
                 FROM works w '.$this->joins($criteria).'
                 WHERE '.$where.'
                 LIMIT :sample';

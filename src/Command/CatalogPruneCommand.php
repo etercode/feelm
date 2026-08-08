@@ -65,7 +65,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
  */
 #[AsCommand(
     name: 'app:catalog:prune',
-    description: 'Hide titles in bulk by rule (blank | unrated | obscure | lowrated | pre1980 | mediocre | explicit | porn | no-imdb)',
+    description: 'Hide titles in bulk by rule (blank | unrated | obscure | lowrated | pre1980 | mediocre | explicit | porn | adult-keyword | no-imdb)',
 )]
 final class CatalogPruneCommand extends Command
 {
@@ -86,7 +86,7 @@ final class CatalogPruneCommand extends Command
     protected function configure(): void
     {
         $this
-            ->addOption('rule', null, InputOption::VALUE_REQUIRED, 'blank, unrated, obscure, lowrated, pre1980, mediocre, explicit, porn or no-imdb', 'blank')
+            ->addOption('rule', null, InputOption::VALUE_REQUIRED, 'blank, unrated, obscure, lowrated, pre1980, mediocre, explicit, porn, adult-keyword or no-imdb', 'blank')
             ->addOption('apply', null, InputOption::VALUE_NONE, 'Actually hide them; without this it only counts')
             ->addOption('restore', null, InputOption::VALUE_NONE, 'Undo a previous run')
             ->addOption('type', null, InputOption::VALUE_REQUIRED, 'Restrict to one type', 'movie')
@@ -377,11 +377,49 @@ final class CatalogPruneCommand extends Command
              * Banging or Loony Porn, which won the Golden Bear; Isabella
              * Rossellini's Green Porno, which is a series of art shorts about
              * how animals mate; and James Gunn's PG Porn, whose entire joke is
-             * that it contains none. Twenty-three titles in total, all listed
-             * at the time of writing, and --restore brings back any of them.
+             * that it contains none. --restore brings back any of them.
+             *
+             * Matched as a prefix rather than a whole word, because the whole-
+             * word form left Pornostar, Porndemic, Pornomochi and Pornstar Pets
+             * sitting in the results — the word is a productive prefix and the
+             * titles are single compounds. Almost nothing else in English
+             * begins with those four letters, so the prefix costs nothing.
              */
             'porn' => $base."
-                AND title ~* '(^|[^a-z])(porn|porno|pornograph[a-z]*|pornucopia)([^a-z]|$)'",
+                AND title ~* '(^|[^a-z])porn'",
+
+            /*
+             * Explicit by TMDB keyword, in any language.
+             *
+             * The title rules are English rules. Charmsukh, Palang Tod, Mastram
+             * and Souryo to Majiwaru Shikiyoku no Yoru ni are exactly what the
+             * word lists exist to remove, and no English pattern will ever find
+             * them. Keywords are the only signal here that is language
+             * independent — a Hindi softcore series carries the keyword
+             * `softcore` because a human tagged it on TMDB.
+             *
+             * The same two-thousand-vote ceiling as `explicit`, and for the
+             * same reason: `erotic thriller` is a keyword on Basic Instinct,
+             * `nudity` on half of European cinema. The ceiling is what
+             * separates a film with a keyword from a film that *is* the
+             * keyword.
+             *
+             * Coverage is the weakness. Only detail-synced titles have keywords
+             * at all, so this reaches roughly half the catalogue — it finds
+             * what the title rules cannot, and misses what was never synced.
+             */
+            'adult-keyword' => $base."
+                AND EXISTS (
+                    SELECT 1 FROM work_tag t
+                     WHERE t.work_id = works.id AND t.kind = 2
+                       AND t.value IN ('softcore','sexploitation','erotic movie','pornography',
+                                       'erotica','gay erotica','eroticism','erotic',
+                                       'erotic thriller','pinku eiga','nudity','sex comedy')
+                )
+                AND NOT EXISTS (
+                    SELECT 1 FROM work_ratings r
+                     WHERE r.work_id = works.id AND r.source = 'imdb' AND r.votes >= 2000
+                )",
 
             'no-imdb' => $base
                 .($includeUnchecked ? '' : ' AND details_synced_at IS NOT NULL')

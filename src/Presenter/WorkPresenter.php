@@ -6,6 +6,7 @@ use App\Entity\Credit;
 use App\Entity\Episode;
 use App\Entity\ExternalId;
 use App\Entity\Season;
+use App\Entity\User;
 use App\Entity\Work;
 use App\Entity\WorkRating;
 use App\Service\PublicUrlGenerator;
@@ -20,9 +21,69 @@ use App\Service\PublicUrlGenerator;
  */
 final class WorkPresenter
 {
+    /**
+     * Whether the viewer has caught up, and which of the titles being presented
+     * they have already opened.
+     *
+     * ---- why this is here rather than in the browser -----------------------
+     *
+     * The NEW badge used to be decided client-side, which meant the browser had
+     * to hold every id the viewer had ever seen — fetched on every single page
+     * load, for a badge. One account was already at 462 ids and nothing bounded
+     * it but the passage of time.
+     *
+     * The question is per card: is *this* title new to *this* viewer. That is
+     * answered here, against the thirty-odd works being presented, and the
+     * answer travels with the row that needs it.
+     *
+     * Null when nobody is signed in, and then `isNew` is simply absent — a
+     * signed-out visitor has no "new since you were last here".
+     *
+     * @var array{seenUpTo: ?string, seen: array<int, true>}|null
+     */
+    private ?array $viewer = null;
+
     public function __construct(
         private readonly PublicUrlGenerator $urls,
     ) {
+    }
+
+    /**
+     * Arms the presenter for one request. Controllers that present a list to a
+     * signed-in viewer call this first; everything else is unaffected.
+     *
+     * @param list<int> $seenWorkIds the subset of this page's works already seen
+     */
+    public function forViewer(?User $user, array $seenWorkIds = []): void
+    {
+        $this->viewer = null === $user ? null : [
+            'seenUpTo' => $user->getSeenUpTo()?->format(\DateTimeInterface::ATOM),
+            'seen' => array_fill_keys($seenWorkIds, true),
+        ];
+    }
+
+    /**
+     * New to this viewer: crawled since they last caught up, and not already
+     * opened. Absent entirely when there is no viewer to be new to.
+     */
+    private function isNew(Work $work): ?bool
+    {
+        if (null === $this->viewer) {
+            return null;
+        }
+
+        $addedAt = $work->getAddedAt()?->format(\DateTimeInterface::ATOM);
+        if (null === $addedAt) {
+            return false;
+        }
+
+        if (isset($this->viewer['seen'][(int) $work->getId()])) {
+            return false;
+        }
+
+        $upTo = $this->viewer['seenUpTo'];
+
+        return null === $upTo || $addedAt > $upTo;
     }
 
     /**
@@ -81,6 +142,8 @@ final class WorkPresenter
             // The NEW badge compares this against when you last caught up.
             'addedAt' => $work->getAddedAt()?->format(\DateTimeInterface::ATOM),
             'isUpcoming' => $work->isUpcoming(),
+            // Decided here, not in the browser — see forViewer().
+            'isNew' => $this->isNew($work),
         ];
     }
 
@@ -173,6 +236,8 @@ final class WorkPresenter
             'details' => $this->details($work),
             'addedAt' => $work->getAddedAt()?->format(\DateTimeInterface::ATOM),
             'isUpcoming' => $work->isUpcoming(),
+            // Decided here, not in the browser — see forViewer().
+            'isNew' => $this->isNew($work),
         ];
 
         if (null !== $work->getTrailer()) {
@@ -213,6 +278,8 @@ final class WorkPresenter
                 'directors' => $this->names($work, Credit::ROLE_DIRECTOR) ?: null,
             ], static fn ($value) => null !== $value),
             'isUpcoming' => true,
+            // Decided here, not in the browser — see forViewer().
+            'isNew' => $this->isNew($work),
         ];
 
         /*
@@ -311,6 +378,8 @@ final class WorkPresenter
             'externalIds' => $this->externalIds($work),
             'source' => $work->getSource(),
             'isUpcoming' => $work->isUpcoming(),
+            // Decided here, not in the browser — see forViewer().
+            'isNew' => $this->isNew($work),
         ];
     }
 

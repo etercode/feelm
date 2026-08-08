@@ -5,6 +5,7 @@ namespace App\Repository;
 use App\Entity\Follow;
 use App\Entity\User;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
+use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\Persistence\ManagerRegistry;
 
 /**
@@ -60,6 +61,30 @@ class FollowRepository extends ServiceEntityRepository
     /**
      * @return list<int>
      */
+    /**
+     * Which of *these* people the viewer already follows.
+     *
+     * followedIdsOf() answers for the whole list, and a search result page has
+     * eight rows on it. Bounded by what is on screen rather than by how many
+     * people somebody follows.
+     *
+     * @param list<int> $userIds
+     *
+     * @return list<int>
+     */
+    public function followedIdsAmong(User $follower, array $userIds): array
+    {
+        if ([] === $userIds) {
+            return [];
+        }
+
+        return array_map('intval', $this->getEntityManager()->getConnection()->executeQuery(
+            'SELECT followed_id FROM follows WHERE follower_id = :me AND followed_id IN (:ids)',
+            ['me' => $follower->getId(), 'ids' => $userIds],
+            ['ids' => ArrayParameterType::INTEGER],
+        )->fetchFirstColumn());
+    }
+
     public function followedIdsOf(User $follower): array
     {
         $rows = $this->createQueryBuilder('f')

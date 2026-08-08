@@ -2,8 +2,10 @@
 
 namespace App\Controller\Api;
 
+use App\Entity\User;
 use App\Entity\Work;
 use App\Presenter\WorkPresenter;
+use App\Repository\SeenMarkRepository;
 use App\Repository\WorkRepository;
 use App\Search\SearchCriteria;
 use App\Search\WorkSearch;
@@ -12,6 +14,7 @@ use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\Security\Http\Attribute\CurrentUser;
 
 /**
  * Everything the front page draws, in one request.
@@ -41,16 +44,25 @@ final class HomeController extends AbstractController
     }
 
     #[Route('/api/home', name: 'api_home', methods: ['GET'])]
-    public function index(Request $request): JsonResponse
-    {
+    public function index(
+        Request $request,
+        SeenMarkRepository $seenMarks,
+        #[CurrentUser] ?User $user = null,
+    ): JsonResponse {
         $rail = min(self::MAX_RAIL, max(1, $request->query->getInt('rail', self::RAIL)));
         $upcomingLimit = min(60, max(1, $request->query->getInt('upcoming', 40)));
 
-        $rails = [];
+        /*
+         * Everything is gathered before anything is presented, because the NEW
+         * badge is decided in the presenter and it needs to know which of *this
+         * page's* titles the viewer has already opened — one query for the lot,
+         * rather than the browser holding every id it has ever seen.
+         */
+        $railWorks = [];
         foreach (Work::TYPES as $type) {
-            $items = $this->rail($type, $rail);
-            if ([] !== $items) {
-                $rails[] = ['type' => $type, 'items' => $items];
+            $works = $this->railWorks($type, $rail);
+            if ([] !== $works) {
+                $railWorks[$type] = $works;
             }
         }
 
@@ -71,6 +83,23 @@ final class HomeController extends AbstractController
             WorkHydrator::CREDITS,
         ]);
 
+        // One lookup covering every title on the page, then present.
+        $onPage = array_merge($latest, $upcoming, ...array_values($railWorks));
+        $ids = array_values(array_filter(array_map(
+            static fn (Work $work) => $work->getId(),
+            $onPage,
+        )));
+
+        $this->presenter->forViewer($user, null === $user ? [] : $seenMarks->seenAmong($user, $ids));
+
+        $rails = [];
+        foreach ($railWorks as $type => $works) {
+            $rails[] = [
+                'type' => $type,
+                'items' => array_map(fn (Work $work) => $this->presenter->listItem($work), $works),
+            ];
+        }
+
         return $this->json([
             'rails' => $rails,
             'latest' => array_map(fn (Work $work) => $this->presenter->listItem($work), $latest),
@@ -85,13 +114,15 @@ final class HomeController extends AbstractController
      * over it, and counting how many of seven hundred thousand rows match is
      * about half the work of listing them.
      *
-     * @return list<array<string, mixed>>
+     * Returns the works rather than the presented rows, so the caller can
+     * gather every title on the page before any of them is presented.
+     *
+     * @return list<Work>
      */
-    private function rail(string $type, int $limit): array
+    private function railWorks(string $type, int $limit): array
     {
         $criteria = new SearchCriteria(types: [$type], sort: 'popularity', limit: $limit);
-        $result = $this->search->search($criteria, withSuggestion: false, withTotal: false);
 
-        return array_map(fn (Work $work) => $this->presenter->listItem($work), $result['works']);
+        return $this->search->search($criteria, withSuggestion: false, withTotal: false)['works'];
     }
 }

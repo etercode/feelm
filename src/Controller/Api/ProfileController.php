@@ -14,6 +14,7 @@ use App\Repository\UserRepository;
 use App\Service\Catalog\WorkHydrator;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
+use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\Security\Http\Attribute\CurrentUser;
@@ -37,6 +38,56 @@ class ProfileController extends AbstractController
      * bounded, which is the point of this response.
      */
     private const REVIEWS = 20;
+
+    /**
+     * Finding somebody to follow.
+     *
+     * Declared before /api/users/{username} on purpose: Symfony matches in
+     * declaration order, and "search" is a perfectly good username as far as
+     * that placeholder is concerned.
+     */
+    #[Route('/api/users/search', name: 'api_users_search', methods: ['GET'])]
+    public function search(
+        Request $request,
+        UserRepository $userRepository,
+        FollowRepository $followRepository,
+        #[CurrentUser] ?User $viewer = null,
+    ): JsonResponse {
+        $term = trim((string) $request->query->get('q', ''));
+
+        // Two characters, or every account comes back on the first keystroke.
+        if (mb_strlen($term) < 2) {
+            return $this->json(['users' => []]);
+        }
+
+        $limit = min(20, max(1, $request->query->getInt('limit', 8)));
+        $found = $userRepository->searchByName($term, $limit, $viewer);
+
+        /*
+         * Whether you already follow each one, so the row can draw the right
+         * button without a request per result. One query for the page.
+         */
+        $following = [];
+        if (null !== $viewer && [] !== $found) {
+            foreach ($followRepository->followedIdsAmong($viewer, array_map(
+                static fn (User $user) => (int) $user->getId(),
+                $found,
+            )) as $id) {
+                $following[$id] = true;
+            }
+        }
+
+        return $this->json([
+            'users' => array_map(static fn (User $user) => [
+                'id' => $user->getId(),
+                'username' => $user->getUsername(),
+                'name' => $user->getName(),
+                'avatar' => $user->getAvatar(),
+                'tagline' => $user->getTagline(),
+                'following' => isset($following[(int) $user->getId()]),
+            ], $found),
+        ]);
+    }
 
     #[Route('/api/users/{username}', name: 'api_users_show', methods: ['GET'])]
     public function show(

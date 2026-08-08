@@ -48,6 +48,44 @@ class UserRepository extends ServiceEntityRepository
      *
      * @return array{items: list<User>, total: int}
      */
+    /**
+     * People, by handle or display name — how you find somebody to follow.
+     *
+     * There was no way to do this at all: the search overlay looked up cast and
+     * crew, and profiles were reachable only if you already knew the URL.
+     *
+     * Deleted accounts are excluded, and so is the person searching — offering
+     * somebody themselves as a stranger to follow is a small thing that reads
+     * as broken.
+     *
+     * ILIKE rather than LOWER(...) LIKE, so an index can be used when this
+     * table stops being small. See PersonRepository::searchByName for the same
+     * mistake found the expensive way.
+     *
+     * @return list<User>
+     */
+    public function searchByName(string $query, int $limit = 8, ?User $except = null): array
+    {
+        $term = trim($query);
+        if ('' === $term) {
+            return [];
+        }
+
+        $qb = $this->createQueryBuilder('u')
+            ->andWhere('u.deletedAt IS NULL')
+            ->andWhere('LOWER(u.username) LIKE :like OR LOWER(u.name) LIKE :like')
+            // Escaped, so a name holding % or _ is searched for literally.
+            ->setParameter('like', '%'.mb_strtolower(addcslashes($term, '%_\\')).'%')
+            ->orderBy('u.username', 'ASC')
+            ->setMaxResults($limit);
+
+        if (null !== $except) {
+            $qb->andWhere('u.id <> :me')->setParameter('me', $except->getId());
+        }
+
+        return $qb->getQuery()->getResult();
+    }
+
     public function page(array $filters, int $offset, int $limit): array
     {
         $items = $this->filtered($filters)

@@ -8,6 +8,7 @@ use App\Entity\Work;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\Connection;
+use Doctrine\DBAL\ParameterType;
 use Doctrine\ORM\Query\Expr\Join;
 use Doctrine\ORM\QueryBuilder;
 use Doctrine\Persistence\ManagerRegistry;
@@ -38,6 +39,67 @@ class EntryRepository extends ServiceEntityRepository
             ->orderBy('e.updatedAt', 'DESC')
             ->getQuery()
             ->getResult();
+    }
+
+    /**
+     * Titles the people you follow have on their shelves, that you have not
+     * already settled.
+     *
+     * ---- what counts as "settled" -----------------------------------------
+     *
+     * Watched and abandoned are answers: suggesting either is telling somebody
+     * about a film they have already made their mind up on. A title on your
+     * *watchlist* is not an answer — it is an intention, and a reminder that a
+     * friend rated it is the most useful nudge this rail can give.
+     *
+     * ---- ranked, then shuffled --------------------------------------------
+     *
+     * Strictly by score the rail would be the same twenty titles until somebody
+     * you follow logged something new, which is the complaint that produced the
+     * related-titles shuffle too. Score picks a pool three times the width of
+     * the rail; chance picks the rail. The pool is ordered before it is cut, so
+     * randomness can only ever reach into the better half.
+     *
+     * The score leans on what a stranger's opinion is worth: IMDb's rating
+     * carries the most weight, our own community score next, and popularity
+     * last and capped — otherwise one blockbuster outranks everything a friend
+     * actually liked.
+     *
+     * @return list<int>
+     */
+    public function suggestionsFromFriends(User $user, int $limit = 20): array
+    {
+        $rows = $this->getEntityManager()->getConnection()->executeQuery(
+            "SELECT id FROM (
+                SELECT DISTINCT w.id,
+                       COALESCE(imdb.rating, 0) * 12
+                         + COALESCE(w.external_score, 0) * 6
+                         + LEAST(COALESCE(w.popularity, 0), 60) AS score
+                  FROM entries friend
+                  JOIN follows f ON f.followed_id = friend.user_id AND f.follower_id = :me
+                  JOIN works w ON w.id = friend.work_id AND w.deleted_at IS NULL
+             LEFT JOIN work_ratings imdb ON imdb.work_id = w.id AND imdb.source = 'imdb'
+                 WHERE friend.status IN ('done', 'active', 'wishlist')
+                   AND NOT EXISTS (
+                       SELECT 1 FROM entries mine
+                        WHERE mine.work_id = w.id
+                          AND mine.user_id = :me
+                          AND mine.status IN ('done', 'dropped')
+                   )
+                 ORDER BY score DESC
+                 LIMIT :pool
+             ) ranked
+             ORDER BY random()
+             LIMIT :limit",
+            ['me' => $user->getId(), 'limit' => $limit, 'pool' => max($limit * 3, 30)],
+            [
+                'me' => ParameterType::INTEGER,
+                'limit' => ParameterType::INTEGER,
+                'pool' => ParameterType::INTEGER,
+            ],
+        )->fetchFirstColumn();
+
+        return array_map('intval', $rows);
     }
 
     /**

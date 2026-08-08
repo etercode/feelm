@@ -35,8 +35,15 @@ final class SearchCriteria
         public readonly ?float $scoreMax = null,
         public readonly ?int $runtimeMin = null,
         public readonly ?int $runtimeMax = null,
-        /** IMDb rating in IMDb's own units, 0–10. */
+        /**
+         * IMDb rating in IMDb's own units, 0-10, as a range open at either end.
+         *
+         * Both bounds, because "worse than 5" is as real a question as "better
+         * than 8" — looking for the notoriously bad is a way people browse, and
+         * a single floor could not express it. Either may be given alone.
+         */
         public readonly ?float $imdbMin = null,
+        public readonly ?float $imdbMax = null,
         public readonly ?int $votesMin = null,
         public readonly array $certifications = [],
         public readonly array $languages = [],
@@ -75,6 +82,7 @@ final class SearchCriteria
             runtimeMin: self::intOrNull($request, 'runtimeMin'),
             runtimeMax: self::intOrNull($request, 'runtimeMax'),
             imdbMin: self::floatOrNull($request, 'imdbMin'),
+            imdbMax: self::floatOrNull($request, 'imdbMax'),
             votesMin: self::intOrNull($request, 'votesMin'),
             certifications: self::list($request, 'certification'),
             languages: self::list($request, 'language'),
@@ -124,6 +132,7 @@ final class SearchCriteria
             || null !== $this->runtimeMin
             || null !== $this->runtimeMax
             || null !== $this->imdbMin
+            || null !== $this->imdbMax
             || null !== $this->votesMin
             || null !== $this->person
             || 'any' !== $this->releaseState;
@@ -144,6 +153,7 @@ final class SearchCriteria
             runtimeMin: $this->runtimeMin,
             runtimeMax: $this->runtimeMax,
             imdbMin: $this->imdbMin,
+            imdbMax: $this->imdbMax,
             votesMin: $this->votesMin,
             certifications: 'certification' === $group ? [] : $this->certifications,
             languages: 'language' === $group ? [] : $this->languages,
@@ -173,6 +183,7 @@ final class SearchCriteria
             runtimeMin: $this->runtimeMin,
             runtimeMax: $this->runtimeMax,
             imdbMin: $this->imdbMin,
+            imdbMax: $this->imdbMax,
             votesMin: $this->votesMin,
             certifications: $this->certifications,
             languages: $this->languages,
@@ -201,6 +212,7 @@ final class SearchCriteria
             'runtimeMin' => $this->runtimeMin,
             'runtimeMax' => $this->runtimeMax,
             'imdbMin' => $this->imdbMin,
+            'imdbMax' => $this->imdbMax,
             'votesMin' => $this->votesMin,
             'certification' => $this->certifications,
             'language' => $this->languages,

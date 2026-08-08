@@ -1057,11 +1057,24 @@ final class WorkSearch
         }
 
         // Ratings live in work_ratings, one row per source.
-        if (null !== $criteria->imdbMin || null !== $criteria->votesMin) {
+        if (null !== $criteria->imdbMin || null !== $criteria->imdbMax || null !== $criteria->votesMin) {
             $rating = ['r.work_id = w.id', "r.source = 'imdb'"];
             if (null !== $criteria->imdbMin) {
                 $rating[] = 'r.rating >= :imdbMin';
                 $params['imdbMin'] = $criteria->imdbMin;
+            }
+            /*
+             * The other end of the same range. "Worse than 5" is as real a
+             * question as "better than 8" — the notoriously bad is a way people
+             * browse — and it needs its own bound rather than an inverted floor.
+             *
+             * Note what the EXISTS means for a ceiling: it asks for a title that
+             * *has* an IMDb rating at or below the number, not for one with no
+             * rating at all. A film nobody has scored is not a bad film.
+             */
+            if (null !== $criteria->imdbMax) {
+                $rating[] = 'r.rating <= :imdbMax';
+                $params['imdbMax'] = $criteria->imdbMax;
             }
             if (null !== $criteria->votesMin) {
                 $rating[] = 'r.votes >= :votesMin';

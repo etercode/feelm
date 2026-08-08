@@ -65,7 +65,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
  */
 #[AsCommand(
     name: 'app:catalog:prune',
-    description: 'Hide titles in bulk by rule (blank | unrated | obscure | lowrated | pre1980 | mediocre | explicit | porn | adult-keyword | no-imdb)',
+    description: 'Hide titles in bulk by rule (blank | unrated | obscure | lowrated | pre1980 | mediocre | explicit | porn | adult-keyword | thin-votes | no-imdb)',
 )]
 final class CatalogPruneCommand extends Command
 {
@@ -86,7 +86,7 @@ final class CatalogPruneCommand extends Command
     protected function configure(): void
     {
         $this
-            ->addOption('rule', null, InputOption::VALUE_REQUIRED, 'blank, unrated, obscure, lowrated, pre1980, mediocre, explicit, porn, adult-keyword or no-imdb', 'blank')
+            ->addOption('rule', null, InputOption::VALUE_REQUIRED, 'blank, unrated, obscure, lowrated, pre1980, mediocre, explicit, porn, adult-keyword, thin-votes or no-imdb', 'blank')
             ->addOption('apply', null, InputOption::VALUE_NONE, 'Actually hide them; without this it only counts')
             ->addOption('restore', null, InputOption::VALUE_NONE, 'Undo a previous run')
             ->addOption('type', null, InputOption::VALUE_REQUIRED, 'Restrict to one type', 'movie')
@@ -419,6 +419,42 @@ final class CatalogPruneCommand extends Command
                 AND NOT EXISTS (
                     SELECT 1 FROM work_ratings r
                      WHERE r.work_id = works.id AND r.source = 'imdb' AND r.votes >= 2000
+                )",
+
+            /*
+             * A rating nobody has voted on enough for it to mean anything.
+             *
+             * The catalogue is small-audience and deliberately narrow, so the
+             * bar is what a title needs to be worth carrying rather than what
+             * it deserves. A 10.0 from five votes is not a masterpiece, it is
+             * the director's friends: all ten titles rated 10.0 were unreleased
+             * 2026 films with between five and twenty-three votes.
+             *
+             * Different thresholds by type, because IMDb voting is not
+             * comparable across them. A thousand votes on a film is unremarkable
+             * and the mainstream clears it easily — the most popular film this
+             * deletes reaches popularity 9.8, and no Hollywood title, franchise
+             * entry or anything a general audience would search for is touched.
+             * A thousand on a series is a different question entirely: Good
+             * Partner (7.8) and Shaka iLembe (9.1) sit under it, and current
+             * Korean and Chinese drama is exactly the episodic content a
+             * watchlist exists for. IMDb's vote count measures IMDb's audience,
+             * not this one, so series get 250.
+             *
+             * The popularity guard is 20 rather than 10 because a 2026 anime
+             * film at popularity 9.4 with 270 votes is not unpopular, it is
+             * unreleased; votes arrive after the film does.
+             *
+             * Only 5.0 and above. Below that `lowrated` already applies, and it
+             * asks a different question — bad rather than unmeasured.
+             */
+            'thin-votes' => $base."
+                AND COALESCE(popularity, 0) < 20
+                AND EXISTS (
+                    SELECT 1 FROM work_ratings r
+                     WHERE r.work_id = works.id AND r.source = 'imdb'
+                       AND r.rating >= 5
+                       AND r.votes < (CASE WHEN works.type = 'movie' THEN 1000 ELSE 250 END)
                 )",
 
             'no-imdb' => $base

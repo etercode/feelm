@@ -445,10 +445,17 @@ final class CatalogPruneCommand extends Command
              * film at popularity 9.4 with 270 votes is not unpopular, it is
              * unreleased; votes arrive after the film does.
              *
+             * The guard alone was not enough, and the release-date clause above
+             * is the actual fix. Applied without it this rule hid 217 unreleased
+             * films — none anticipated, the most popular reached 12.3 — but a
+             * vote threshold is simply the wrong question to ask of a film that
+             * has not come out. Six months after release the votes are in.
+             *
              * Only 5.0 and above. Below that `lowrated` already applies, and it
              * asks a different question — bad rather than unmeasured.
              */
             'thin-votes' => $base."
+                AND (release_date IS NULL OR release_date <= CURRENT_DATE - INTERVAL '180 days')
                 AND COALESCE(popularity, 0) < 20
                 AND EXISTS (
                     SELECT 1 FROM work_ratings r

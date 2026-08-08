@@ -51,14 +51,18 @@ final class WorkSearch
     private const COUNT_CEILING = 1000;
 
     /**
-     * How many matches a facet counts over: exact for anything narrower,
-     * indicative above it.
+     * How long a computed facet panel is held.
      *
-     * Tied to the count ceiling so the numbers on one page agree with each
-     * other. Sampling deeper than we count reads as a mistake — "1,000+
-     * results" over a chip claiming 1,376 of them are drama.
+     * The counts are exact now, and exact counting is worth doing once rather
+     * than once per visitor. An hour matches the filters endpoint next door,
+     * and the catalogue only moves when the nightly crawl runs, so an hour of
+     * staleness is at worst a title or two missing from a five-figure number.
+     *
+     * The key deliberately ignores sort, page and limit — none of them change
+     * what matches — so paging through a result set reuses the panel computed
+     * for page one.
      */
-    private const FACET_SAMPLE = self::COUNT_CEILING;
+    private const FACETS_CACHE_SECONDS = 3600;
 
     /**
      * Per-query answers from needsFuzzy(), for the life of one request.
@@ -312,19 +316,51 @@ final class WorkSearch
     public function facets(SearchCriteria $criteria): array
     {
         /*
+         * Exact counts, cached, rather than a sample counted every time.
+         *
+         * They used to count over a thousand matching rows, which was honest
+         * about narrowing a search and useless for the question people
+         * actually ask of the panel: how much of the catalogue is in Japanese.
+         * "EN 405" beside 126,221 English films is not an answer to that.
+         *
+         * What made exact counting expensive was reading one column out of the
+         * heap for every matching row. Three partial indexes now cover the
+         * columns the panel groups by — see Version20260808170000 — and the
+         * whole panel costs 183ms against the local catalogue where a single
+         * language count used to cost 300ms. Cached for an hour on top.
+         */
+        $key = $criteria->toArray();
+        unset($key['sort'], $key['page'], $key['limit']);
+
+        return $this->cache->get(
+            'search.facets.'.hash('xxh128', serialize($key)),
+            function (ItemInterface $item) use ($criteria): array {
+                $item->expiresAfter(self::FACETS_CACHE_SECONDS);
+
+                return $this->computeFacets($criteria);
+            },
+            // Recomputing is the entire cost and one reader is not a herd.
+            0.0,
+        );
+    }
+
+    /**
+     * @return array{types: array<string, int>, genres: list<array{slug: string, name: string, count: int}>, countries: list<array{code: string, count: int}>, languages: list<array{code: string, count: int}>, decades: list<array{decade: int, count: int}>}
+     */
+    private function computeFacets(SearchCriteria $criteria): array
+    {
+        /*
          * Each facet drops its own filter — the type counts are what you would
          * get if you changed type, not what you have already narrowed to — so
          * the four do not always share a WHERE and cannot always share a scan.
          *
-         * They usually do, though. With no type, genre, country or year filter
-         * set, all four without() calls give back the same criteria, and the
-         * four queries were four identical scans of the same thousand rows.
-         * Measured on the server for q=love: 103ms + 746ms + 244ms + the
-         * decades, against one scan feeding all four.
+         * They usually do, though. With no type, genre, country, language or
+         * year filter set, all five without() calls give back the same
+         * criteria, and one query answers all of them.
          *
          * So they are grouped by the WHERE they actually produce, and each
          * distinct group is one query. No filters is one query; a type filter
-         * makes it two; every filter at once falls back to what it did before.
+         * makes it two; every filter at once is one query per facet.
          */
         $wanted = [
             'types' => $criteria->without('type'),
@@ -361,12 +397,16 @@ final class WorkSearch
     }
 
     /**
-     * Several facets over one sample, in one round trip.
+     * Several facets over the same match set, in one round trip.
      *
-     * The sample is a MATERIALIZED CTE precisely so Postgres computes it once
-     * and every aggregate below reads the result. Without the keyword it is
-     * free to inline the subquery into each branch, which is the four scans
-     * this exists to stop.
+     * The match set is repeated as a plain subquery inside each aggregate
+     * rather than shared as a MATERIALIZED CTE, and that is deliberate. A
+     * materialised CTE would be computed once — but as a heap of rows, which
+     * throws away the index-only scans the facet indexes exist to provide. An
+     * inline subquery is flattened into each aggregate, so each is planned as
+     * if it had been written by hand against works. Measured locally over all
+     * 826k movies: 183ms for the whole panel flattened, against 300ms for the
+     * language count alone when it had to read the heap.
      *
      * @param list<string> $names
      *
@@ -375,18 +415,17 @@ final class WorkSearch
     private function facetGroup(array $names, SearchCriteria $criteria): array
     {
         [$where, $params, $types] = $this->conditions($criteria);
-        $sample = $this->sampleSql($criteria, $where, $params);
-        $types['sample'] = ParameterType::INTEGER;
+        $match = $this->matchSql($criteria, $where);
 
         $selects = [];
 
         foreach ($names as $name) {
             $selects[] = match ($name) {
                 'types' => "(SELECT json_agg(json_build_object('type', t.type, 'n', t.n))
-                             FROM (SELECT w.type, COUNT(*) AS n FROM sample w GROUP BY w.type) t) AS types",
+                             FROM (SELECT w.type, COUNT(*) AS n FROM ({$match}) w GROUP BY w.type) t) AS types",
                 'genres' => "(SELECT json_agg(json_build_object('slug', g.slug, 'name', g.name, 'n', g.n))
                              FROM (SELECT fg.slug, fg.name, COUNT(*) AS n
-                                   FROM sample w
+                                   FROM ({$match}) w
                                    JOIN work_genre fwg ON fwg.work_id = w.id
                                    JOIN genres fg ON fg.id = fwg.genre_id
                                    GROUP BY fg.slug, fg.name
@@ -394,21 +433,21 @@ final class WorkSearch
                                    LIMIT 24) g) AS genres",
                 'countries' => "(SELECT json_agg(json_build_object('code', c.value, 'n', c.n))
                                  FROM (SELECT wt.value, COUNT(*) AS n
-                                       FROM sample w
+                                       FROM ({$match}) w
                                        JOIN work_tag wt ON wt.work_id = w.id AND wt.kind = :countryKind
                                        GROUP BY wt.value
                                        ORDER BY n DESC, wt.value ASC
                                        LIMIT 24) c) AS countries",
                 'languages' => "(SELECT json_agg(json_build_object('code', l.original_language, 'n', l.n))
                                  FROM (SELECT w.original_language, COUNT(*) AS n
-                                       FROM sample w
+                                       FROM ({$match}) w
                                        WHERE w.original_language IS NOT NULL
                                        GROUP BY w.original_language
                                        ORDER BY n DESC, w.original_language ASC
                                        LIMIT 24) l) AS languages",
                 'decades' => "(SELECT json_agg(json_build_object('decade', d.decade, 'n', d.n))
                                FROM (SELECT (w.year / 10) * 10 AS decade, COUNT(*) AS n
-                                     FROM sample w WHERE w.year IS NOT NULL
+                                     FROM ({$match}) w WHERE w.year IS NOT NULL
                                      GROUP BY decade ORDER BY decade DESC) d) AS decades",
                 default => throw new \InvalidArgumentException('Unknown facet: '.$name),
             };
@@ -419,7 +458,7 @@ final class WorkSearch
         }
 
         $row = $this->connection()->executeQuery(
-            'WITH sample AS MATERIALIZED ('.$sample.') SELECT '.implode(', ', $selects),
+            'SELECT '.implode(', ', $selects),
             $params,
             $types,
         )->fetchAssociative() ?: [];
@@ -1168,44 +1207,30 @@ final class WorkSearch
     }
 
     /**
-     * The matching rows a facet counts over, capped.
+     * Every row a facet counts over — the whole match set, uncapped.
      *
-     * Facets were the most expensive thing left in a broad search: three
-     * GROUP BYs, each visiting every match. For "the" that is 629,461 rows
-     * counted three times over — five of the seven seconds the search page
-     * took, to put a number beside a chip.
+     * This was capped at a thousand rows for a long time, and the reason it no
+     * longer needs to be is worth stating. Facets were the most expensive
+     * thing left in a broad search: for "the" that is 629,461 matches, and
+     * three GROUP BYs over them were five of the seven seconds the page took.
+     * The fix at the time was to count fewer rows.
      *
-     * They count over the most popular FACET_SAMPLE matches instead. Anything
-     * narrower than that is counted in full and the numbers are exact; broader
-     * and they describe the part of the result anybody is going to page
-     * through, which is what the chips are for — narrowing a search, not
-     * measuring the catalog.
+     * The catalogue is a fifth of that size now, and the columns the panel
+     * groups by are covered by their own partial indexes, so the aggregates
+     * never touch the heap. Counting all of it costs less today than counting
+     * a thousand of it did then — and an exact number is the one people are
+     * actually asking for when they read a filter panel.
      *
-     * @param array<string, mixed> $params
+     * No ORDER BY: there is nothing to rank, only to group.
+     *
+     * The four columns are the ones the aggregates group by. Postgres flattens
+     * this into each of them and reads only what that aggregate needs.
      */
-    private function sampleSql(SearchCriteria $criteria, string $where, array &$params): string
+    private function matchSql(SearchCriteria $criteria, string $where): string
     {
-        $params['sample'] = self::FACET_SAMPLE;
-
-        /*
-         * No ORDER BY, and that is the whole optimisation.
-         *
-         * Ordering the sample by popularity means finding the most popular
-         * thousand, which means visiting all 629,461 matches first — the LIMIT
-         * saves the aggregation and none of the scan. Measured on the server:
-         * 1,415ms ordered against 25ms unordered, because unordered lets the
-         * index scan stop as soon as it has a thousand rows.
-         *
-         * Unordered is also the better sample for this purpose. A popularity-
-         * ranked thousand is skewed towards blockbusters, and these counts are
-         * meant to describe the result as a whole — how much of it is drama,
-         * how much is television — so an arbitrary slice represents it more
-         * honestly than the top of it does.
-         */
         return 'SELECT w.id, w.type, w.year, w.original_language
                 FROM works w '.$this->joins($criteria).'
-                WHERE '.$where.'
-                LIMIT :sample';
+                WHERE '.$where;
     }
 
 

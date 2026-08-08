@@ -65,7 +65,7 @@ use Symfony\Component\Console\Style\SymfonyStyle;
  */
 #[AsCommand(
     name: 'app:catalog:prune',
-    description: 'Hide titles in bulk by rule (blank | unrated | obscure | lowrated | pre1980 | mediocre | explicit | no-imdb)',
+    description: 'Hide titles in bulk by rule (blank | unrated | obscure | lowrated | pre1980 | mediocre | explicit | porn | no-imdb)',
 )]
 final class CatalogPruneCommand extends Command
 {
@@ -86,7 +86,7 @@ final class CatalogPruneCommand extends Command
     protected function configure(): void
     {
         $this
-            ->addOption('rule', null, InputOption::VALUE_REQUIRED, 'blank, unrated, obscure, lowrated, pre1980, mediocre, explicit or no-imdb', 'blank')
+            ->addOption('rule', null, InputOption::VALUE_REQUIRED, 'blank, unrated, obscure, lowrated, pre1980, mediocre, explicit, porn or no-imdb', 'blank')
             ->addOption('apply', null, InputOption::VALUE_NONE, 'Actually hide them; without this it only counts')
             ->addOption('restore', null, InputOption::VALUE_NONE, 'Undo a previous run')
             ->addOption('type', null, InputOption::VALUE_REQUIRED, 'Restrict to one type', 'movie')
@@ -361,6 +361,27 @@ final class CatalogPruneCommand extends Command
                     SELECT 1 FROM work_ratings r
                      WHERE r.work_id = works.id AND r.source = 'imdb' AND r.votes >= 2000
                 )",
+
+            /*
+             * Anything whose title announces pornography, at any vote count.
+             *
+             * Deliberately harsher than `explicit`, and an operator's call
+             * rather than a quality judgement: this catalogue's audience does
+             * not come here for the subject, so a well-made documentary about
+             * the industry is as unwanted as the industry's own output. That is
+             * why there is no vote ceiling and no exemption for documentary.
+             *
+             * It is worth being honest about what that costs, because the word
+             * is not only ever used literally. It takes Zack and Miri Make a
+             * Porno, a mainstream romantic comedy with 187,180 votes; Bad Luck
+             * Banging or Loony Porn, which won the Golden Bear; Isabella
+             * Rossellini's Green Porno, which is a series of art shorts about
+             * how animals mate; and James Gunn's PG Porn, whose entire joke is
+             * that it contains none. Twenty-three titles in total, all listed
+             * at the time of writing, and --restore brings back any of them.
+             */
+            'porn' => $base."
+                AND title ~* '(^|[^a-z])(porn|porno|pornograph[a-z]*|pornucopia)([^a-z]|\\$)'",
 
             'no-imdb' => $base
                 .($includeUnchecked ? '' : ' AND details_synced_at IS NOT NULL')

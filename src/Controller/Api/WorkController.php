@@ -37,7 +37,7 @@ class WorkController extends AbstractController
     }
 
     #[Route('/api/items', name: 'api_items_list', methods: ['GET'])]
-    public function list(Request $request): JsonResponse
+    public function list(Request $request, #[CurrentUser] ?User $viewer = null): JsonResponse
     {
         $criteria = SearchCriteria::fromRequest($request);
 
@@ -45,6 +45,7 @@ class WorkController extends AbstractController
         // the work, and the pager still learns whether a next page exists.
         $withTotal = $request->query->getBoolean('total', true);
         $result = $this->search->search($criteria, withSuggestion: false, withTotal: $withTotal);
+        $this->presenter->forViewer($viewer, $result['works']);
 
         return $this->json([
             'items' => array_map(fn (Work $work) => $this->presenter->listItem($work), $result['works']),
@@ -82,8 +83,13 @@ class WorkController extends AbstractController
     }
 
     #[Route('/api/items/{type}/{slug}', name: 'api_items_show', methods: ['GET'], requirements: ['type' => 'movie|series|game|book'])]
-    public function show(string $type, string $slug, ReviewRepository $reviews, WorkHydrator $hydrator): JsonResponse
-    {
+    public function show(
+        string $type,
+        string $slug,
+        ReviewRepository $reviews,
+        WorkHydrator $hydrator,
+        #[CurrentUser] ?User $viewer = null,
+    ): JsonResponse {
         $work = $this->requireWork($type, $slug);
 
         /*
@@ -94,6 +100,7 @@ class WorkController extends AbstractController
          * `people`. This makes it four.
          */
         $hydrator->preload([$work]);
+        $this->presenter->forViewer($viewer, [$work]);
 
         return $this->json([
             'item' => $this->presenter->one($work),

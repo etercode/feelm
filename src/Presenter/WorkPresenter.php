@@ -9,6 +9,8 @@ use App\Entity\Season;
 use App\Entity\User;
 use App\Entity\Work;
 use App\Entity\WorkRating;
+use App\Repository\EntryRepository;
+use App\Repository\SeenMarkRepository;
 use App\Service\PublicUrlGenerator;
 
 /**
@@ -39,12 +41,14 @@ final class WorkPresenter
      * Null when nobody is signed in, and then `isNew` is simply absent — a
      * signed-out visitor has no "new since you were last here".
      *
-     * @var array{seenUpTo: ?string, seen: array<int, true>}|null
+     * @var array{seenUpTo: ?string, seen: array<int, true>, entries: array<int, array<string, mixed>>}|null
      */
     private ?array $viewer = null;
 
     public function __construct(
         private readonly PublicUrlGenerator $urls,
+        private readonly SeenMarkRepository $seenMarks,
+        private readonly EntryRepository $entries,
     ) {
     }
 
@@ -52,14 +56,45 @@ final class WorkPresenter
      * Arms the presenter for one request. Controllers that present a list to a
      * signed-in viewer call this first; everything else is unaffected.
      *
-     * @param list<int> $seenWorkIds the subset of this page's works already seen
+     * It does its own two lookups rather than taking them as arguments, so a
+     * controller cannot half-arm it — the failure mode of the alternative is a
+     * page that quietly shows no shelf badges, which nothing would catch.
+     *
+     * @param list<Work> $works everything about to be presented
      */
-    public function forViewer(?User $user, array $seenWorkIds = []): void
+    public function forViewer(?User $user, array $works): void
     {
-        $this->viewer = null === $user ? null : [
+        if (null === $user) {
+            $this->viewer = null;
+
+            return;
+        }
+
+        $ids = array_values(array_filter(array_map(
+            static fn (Work $work) => $work->getId(),
+            $works,
+        )));
+
+        $this->viewer = [
             'seenUpTo' => $user->getSeenUpTo()?->format(\DateTimeInterface::ATOM),
-            'seen' => array_fill_keys($seenWorkIds, true),
+            'seen' => array_fill_keys($this->seenMarks->seenAmong($user, $ids), true),
+            'entries' => $this->entries->forWorks($user, $ids),
         ];
+    }
+
+    /**
+     * The viewer's own shelf row for this title, or null.
+     *
+     * Travels with the card for the same reason `isNew` does: every consumer —
+     * ShelfControls, QuickShelf, ReviewEditor, SeasonBrowser, the poster, the
+     * hero — asks about one id, and the browser was pulling the entire shelf on
+     * every page load so it could answer them.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function viewerEntry(Work $work): ?array
+    {
+        return $this->viewer['entries'][(int) $work->getId()] ?? null;
     }
 
     /**
@@ -144,6 +179,7 @@ final class WorkPresenter
             'isUpcoming' => $work->isUpcoming(),
             // Decided here, not in the browser — see forViewer().
             'isNew' => $this->isNew($work),
+            'viewerEntry' => $this->viewerEntry($work),
         ];
     }
 
@@ -238,6 +274,7 @@ final class WorkPresenter
             'isUpcoming' => $work->isUpcoming(),
             // Decided here, not in the browser — see forViewer().
             'isNew' => $this->isNew($work),
+            'viewerEntry' => $this->viewerEntry($work),
         ];
 
         if (null !== $work->getTrailer()) {
@@ -280,6 +317,7 @@ final class WorkPresenter
             'isUpcoming' => true,
             // Decided here, not in the browser — see forViewer().
             'isNew' => $this->isNew($work),
+            'viewerEntry' => $this->viewerEntry($work),
         ];
 
         /*
@@ -380,6 +418,7 @@ final class WorkPresenter
             'isUpcoming' => $work->isUpcoming(),
             // Decided here, not in the browser — see forViewer().
             'isNew' => $this->isNew($work),
+            'viewerEntry' => $this->viewerEntry($work),
         ];
     }
 

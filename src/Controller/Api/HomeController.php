@@ -5,7 +5,6 @@ namespace App\Controller\Api;
 use App\Entity\User;
 use App\Entity\Work;
 use App\Presenter\WorkPresenter;
-use App\Repository\SeenMarkRepository;
 use App\Repository\WorkRepository;
 use App\Search\SearchCriteria;
 use App\Search\WorkSearch;
@@ -46,7 +45,6 @@ final class HomeController extends AbstractController
     #[Route('/api/home', name: 'api_home', methods: ['GET'])]
     public function index(
         Request $request,
-        SeenMarkRepository $seenMarks,
         #[CurrentUser] ?User $user = null,
     ): JsonResponse {
         $rail = min(self::MAX_RAIL, max(1, $request->query->getInt('rail', self::RAIL)));
@@ -83,14 +81,10 @@ final class HomeController extends AbstractController
             WorkHydrator::CREDITS,
         ]);
 
-        // One lookup covering every title on the page, then present.
+        // Armed once with every title on the page, then present.
         $onPage = array_merge($latest, $upcoming, ...array_values($railWorks));
-        $ids = array_values(array_filter(array_map(
-            static fn (Work $work) => $work->getId(),
-            $onPage,
-        )));
 
-        $this->presenter->forViewer($user, null === $user ? [] : $seenMarks->seenAmong($user, $ids));
+        $this->presenter->forViewer($user, $onPage);
 
         $rails = [];
         foreach ($railWorks as $type => $works) {

@@ -6,6 +6,7 @@ use App\Entity\Entry;
 use App\Entity\User;
 use App\Entity\Work;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
+use Doctrine\DBAL\ArrayParameterType;
 use Doctrine\DBAL\Connection;
 use Doctrine\ORM\Query\Expr\Join;
 use Doctrine\ORM\QueryBuilder;
@@ -40,14 +41,54 @@ class EntryRepository extends ServiceEntityRepository
     }
 
     /**
+     * The viewer's own shelf rows for *these* works, keyed by work id.
+     *
+     * shelfStateForUser() answers for the whole shelf, and that is what the
+     * browser was pulling on every page load — 682 rows so that a poster card
+     * could ask about one id. Every consumer of it is a point lookup:
+     * ShelfControls, QuickShelf, ReviewEditor, SeasonBrowser, PosterCard and
+     * the hero all call entryFor(user, item) and nothing iterates the list.
+     *
+     * @param list<int> $workIds
+     *
+     * @return array<int, array{status: string, rating: ?string, progress: ?array<string, mixed>}>
+     */
+    public function forWorks(User $user, array $workIds): array
+    {
+        if ([] === $workIds) {
+            return [];
+        }
+
+        $rows = $this->getEntityManager()->getConnection()->executeQuery(
+            'SELECT work_id, status, rating, progress FROM entries
+              WHERE user_id = :user AND work_id IN (:ids)',
+            ['user' => $user->getId(), 'ids' => $workIds],
+            ['ids' => ArrayParameterType::INTEGER],
+        )->fetchAllAssociative();
+
+        $out = [];
+        foreach ($rows as $row) {
+            $progress = $row['progress'] ?? null;
+
+            $out[(int) $row['work_id']] = [
+                'status' => (string) $row['status'],
+                'rating' => null === $row['rating'] ? null : (string) $row['rating'],
+                'progress' => \is_string($progress) ? json_decode($progress, true) : $progress,
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
      * Somebody's whole shelf as plain rows: what is on it and in what state,
      * and nothing about the titles themselves.
      *
-     * The browser keeps this so any poster anywhere can show whether it is on
-     * your shelf, which means it genuinely does have to be all of them — there
-     * is no page of it that would answer the question. What it does not need is
-     * the titles: every screen that draws one is given it by whatever endpoint
-     * filled that screen.
+     * This used to be fetched by the browser on every page load, on the theory
+     * that any poster anywhere might need to know whether it is on your shelf.
+     * It does not: every consumer asks about one id, so forWorks() above answers
+     * the same question bounded by what is actually on screen. What remains for
+     * this method is the shelf page itself, which really does want all of it.
      *
      * Array hydration, and the work is joined but never selected. Building
      * three thousand Entry objects each holding a fully hydrated Work is what

@@ -2,6 +2,7 @@
 
 namespace App\Controller\Api;
 
+use App\Entity\User;
 use App\Presenter\WorkPresenter;
 use App\Repository\GenreRepository;
 use App\Repository\PersonRepository;
@@ -12,6 +13,7 @@ use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\Security\Http\Attribute\CurrentUser;
 use Symfony\Contracts\Cache\CacheInterface;
 use Symfony\Contracts\Cache\ItemInterface;
 
@@ -46,11 +48,13 @@ class SearchController extends AbstractController
     }
 
     #[Route('/api/search', name: 'api_search', methods: ['GET'])]
-    public function search(Request $request): JsonResponse
+    public function search(Request $request, #[CurrentUser] ?User $viewer = null): JsonResponse
     {
         $criteria = SearchCriteria::fromRequest($request);
         $withTotal = $request->query->getBoolean('total', true);
         $result = $this->search->search($criteria, withTotal: $withTotal);
+        // Shelf state and the NEW badge for these rows — see WorkPresenter.
+        $this->presenter->forViewer($viewer, $result['works']);
 
         $payload = [
             'query' => $criteria->query,
@@ -79,7 +83,7 @@ class SearchController extends AbstractController
      * correction, without the facet queries.
      */
     #[Route('/api/search/suggest', name: 'api_search_suggest', methods: ['GET'])]
-    public function suggest(Request $request): JsonResponse
+    public function suggest(Request $request, #[CurrentUser] ?User $viewer = null): JsonResponse
     {
         $criteria = SearchCriteria::fromRequest($request);
         if (!$criteria->hasQuery()) {
@@ -87,6 +91,7 @@ class SearchController extends AbstractController
         }
 
         $result = $this->search->search($criteria);
+        $this->presenter->forViewer($viewer, $result['works']);
 
         return $this->json([
             'query' => $criteria->query,
